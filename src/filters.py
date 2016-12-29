@@ -4,32 +4,71 @@ from parts import JavaDoc
 
 
 class Filter:
-
     NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
     string = "@string"
     tag = "@htmlTag"
     reference = "@reference"
     link = "@link"
+    path = "@url"
     url = "@url"
     variable = "@variable"
     invocation = "@invocation"
     dotInvocation = "@dotInvocation"
+    number = "@number"
+    stableReduction = "@sr"
+    head = "@head"
+    param = "@param"
+    result = "@return"
+    see = "@see"
 
     keywords = {
         string,
         tag,
         reference,
         link,
+        path,
         url,
         variable,
         invocation,
-        dotInvocation
+        dotInvocation,
+        number,
+        stableReduction,
+        head,
+        param,
+        result,
+        see
+    }
+
+    punctuation = {
+        "--",
+        ".",
+        ",",
+        ":",
+        ";",
+        "(",
+        ")",
+        "{",
+        "}"
     }
 
     @staticmethod
+    def diff(s1: str, s2: str) -> str:
+        left = s1.index(s2)
+        return s1[:left] + s1[left + len(s2):]
+
+    @staticmethod
     def isKeyWord(string) -> bool:
-        return string in Filter.keywords
+        for keyword in Filter.keywords:
+            if keyword in string and string.index(keyword) == 0:
+                    diff = Filter.diff(string, keyword)
+                    if len(diff) == 0 or diff.isnumeric():
+                        return True
+        return False
+
+    @staticmethod
+    def isPunctuation(string: str) -> bool:
+        return string in Filter.punctuation
 
     @staticmethod
     def wordsNumber(words: list) -> int:
@@ -52,8 +91,12 @@ def filterLinks(string: str) -> str:
     return re.sub("(\{@|@\{)[^\}]*\}", " %s " % Filter.link, string)
 
 
+def filterPaths(string: str) -> str:
+    return re.sub(r"(/[a-zA-Z](\w|\.|\\\s)*){2,}", " %s " % Filter.path, string)
+
+
 def filterURLs(string: str) -> str:
-    return re.sub(r"([^\s]+\.[a-z]{2,3}|\w+:(//|\\\\))(\w|/|\\|\?|=|-)*", " %s " % Filter.url, string)
+    return re.sub(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))", " %s " % Filter.url, string)
 
 
 def filterParamNames(string: str, params: list) -> str:
@@ -77,6 +120,10 @@ def filterDotTuple(string: str) -> str:
     return re.sub(regex, " %s " % Filter.dotInvocation, string)
 
 
+def filterNumbers(string: str) -> str:
+    return re.sub(r"(\+|-)?(\d+(\.|,)?\d+|\d+)", " %s " % Filter.number, string)
+
+
 def filterMeaninglessSentences(string: str) -> str:
     text = []
     sentence = []
@@ -84,11 +131,25 @@ def filterMeaninglessSentences(string: str) -> str:
         sentence.append(ch)
         if ch == '.' and len(sentence) > 1:
             sentence = "".join(sentence)
-            words = sentence.split(" ")
-            if Filter.wordsNumber(words) / len(words) > Filter.NORMAL_CONCENTRATION_OF_WORDS:
+            words = [word for word in sentence.split(" ") if len(word) > 0]
+            if (Filter.wordsNumber(words) / len(words)) > Filter.NORMAL_CONCENTRATION_OF_WORDS:
                 text.append(sentence)
+            else:
+                print(sentence)
             sentence = []
     return "".join(text)
+
+
+def filterStableReduction(string: str) -> str:
+    return re.sub(r"([a-zA-Z])\.([a-zA-Z])\.", r" {}_\1_\2_ ".format(Filter.stableReduction), string)
+
+
+def unpackStableReduction(string: str) -> str:
+    return re.sub(r"{}_([^_]+)_([^_]+)_".format(Filter.stableReduction), r" \1.\2. ", string)
+
+
+def expandWordsAndSymbols(string: str) -> str:
+    return re.sub(r"(\{})".format("|\\".join(Filter.punctuation)), r" \1 ", string)
 
 
 def filterLongSpaces(string: str) -> str:
@@ -104,15 +165,20 @@ def filterFirstAndEndSpaces(string: str) -> str:
 
 
 def applyFiltersForString(string: str, params: list) -> str:
+    if len(string) == 0: return string
     string = filterStrings(string)
     string = filterTags(string)
     string = filterRefs(string)
     string = filterLinks(string)
+    string = filterStableReduction(string)
     string = filterURLs(string)
+    string = filterNumbers(string)
     string = filterParamNames(string, params)
     string = filterFunctionInvocation(string)
     # string = filterDotTuple(string)
+    string = expandWordsAndSymbols(string)
     string = filterMeaninglessSentences(string)
+    string = unpackStableReduction(string)
     string = filterLongSpaces(string)
     string = filterFirstAndEndSpaces(string)
     return string
