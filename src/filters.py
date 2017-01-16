@@ -41,7 +41,6 @@ class Filter:
     }
 
     punctuation = {
-        "--",
         ".",
         ",",
         ":",
@@ -177,7 +176,7 @@ def applyFiltersForString(string: str, params: list) -> str:
     string = filterFunctionInvocation(string)
     # string = filterDotTuple(string)
     string = expandWordsAndSymbols(string)
-    string = filterMeaninglessSentences(string)
+    # string = filterMeaninglessSentences(string)
     string = unpackStableReduction(string)
     string = filterLongSpaces(string)
     string = filterFirstAndEndSpaces(string)

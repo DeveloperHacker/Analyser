@@ -7,6 +7,14 @@ class Type:
     def __str__(self) -> str:
         return self.name
 
+class Parameter:
+
+    def __init__(self):
+        self.name = ""
+        self.type = Type("")
+
+    def __str__(self) -> str:
+        return "{} {}".format(self.type, self.name)
 
 class JavaDoc:
 
@@ -25,29 +33,56 @@ class JavaDoc:
         tmp.extend(self.throws)
         return "/**\n{}\n */".format("\n".join(tmp))
 
+class Contract:
 
-class Method:
+    def __init__(self):
+        self.enters = []
+        self.exits = []
+        self.exitIds = []
+
+    def __str__(self) -> str:
+        lines = [":::ENTER"]
+        for enter in self.enters:
+            lines.append(enter)
+        lines.append(":::EXIT")
+        for _exit in self.exits:
+            lines.append(_exit)
+        for exitId in self.exitIds:
+            lines.append(":::EXIT-{}".format(exitId["id"]))
+            for _exit in exitId["exits"]:
+                lines.append(_exit)
+        return "\n".join(lines)
+
+class MethodDescription:
 
     def __init__(self):
         self.name = ""
         self.type = Type("")
         self.params = []
-        self.javaDoc = JavaDoc()
         self.owner = Type("")
 
     def __str__(self) -> str:
-        javaDoc = str(self.javaDoc)
+        name = self.name
         tyre = str(self.type)
         owner = str(self.owner)
         params = ", ".join([str(param) for param in self.params])
-        return "{}\n{} {}.{}({})".format(javaDoc, tyre, owner, self.name, params)
+        return "{} {}.{}({})".format(tyre, owner, name, params)
 
 
-class Parameter:
+class AstMethod:
 
     def __init__(self):
-        self.name = ""
-        self.type = Type("")
+        self.description = MethodDescription()
+        self.javaDoc = JavaDoc()
 
     def __str__(self) -> str:
-        return "{} {}".format(self.type, self.name)
+        return "{}\n{}".format(str(self.javaDoc), str(self.description))
+
+class DaikonMethod:
+
+    def __init__(self):
+        self.description = MethodDescription()
+        self.contract = Contract()
+
+    def __str__(self) -> str:
+        return "{}\n{}".format(str(self.description), str(self.contract))

@@ -1,10 +1,16 @@
+import _pickle as pickle
 import xml.etree.ElementTree
 from xml.etree.ElementTree import ElementTree
 
+import numpy
+import tensorflow
+
+import generators
 from parts import *
 
 
 class Tags:
+
     methods = "methods"
     method = "method"
     javaDoc = "javaDoc"
@@ -18,15 +24,21 @@ class Tags:
     type = "type"
     parameters = "parameters"
     owner = "owner"
+    contract = "contract"
+    enter = "enter"
+    enters = "enters"
+    exit = "exit"
+    exits = "exits"
+    exitId = "exitId"
+    exitIds = "exitIds"
 
 
-def unpackJavaDoc(absoluteFileName: str) -> list:
+def unpackAstMethods(absoluteFileName: str) -> list:
     parser = xml.etree.ElementTree.parse(absoluteFileName).getroot()  # type: ElementTree
     methods = []
     for methodTag in parser.findall(Tags.method):
-        method = Method()
+        javaDoc = JavaDoc()
         for javaDocTag in methodTag.findall(Tags.javaDoc):
-            javaDoc = JavaDoc()
             for headTag in javaDocTag.findall(Tags.head):
                 javaDoc.head = headTag.text
             for paramTag in javaDocTag.findall(Tags.param):
@@ -37,12 +49,12 @@ def unpackJavaDoc(absoluteFileName: str) -> list:
                 javaDoc.sees.append(see.text)
             for throw in javaDocTag.findall(Tags.throws):
                 javaDoc.throws.append(throw.text)
-            method.javaDoc = javaDoc
+        description = MethodDescription()
         for descriptionTag in methodTag.findall(Tags.description):
             for nameTag in descriptionTag.findall(Tags.name):
-                method.name = nameTag.text
+                description.name = nameTag.text
             for typeTAg in descriptionTag.findall(Tags.type):
-                method.type = Type(typeTAg.text)
+                description.type = Type(typeTAg.text)
             for paramsTag in descriptionTag.findall(Tags.parameters):
                 for paramTag in paramsTag.findall(Tags.param):
                     parameter = Parameter()
@@ -50,8 +62,76 @@ def unpackJavaDoc(absoluteFileName: str) -> list:
                         parameter.name = nameTag.text
                     for typeTAg in paramTag.findall(Tags.type):
                         parameter.type = Type(typeTAg.text)
-                    method.params.append(parameter)
+                        description.params.append(parameter)
             for owner in descriptionTag.findall(Tags.owner):
-                method.owner = Type(owner.text)
+                description.owner = Type(owner.text)
+        method = AstMethod()
+        method.description = description
+        method.javaDoc = javaDoc
         methods.append(method)
     return methods
+
+
+def unpackDaikonMethods(absoluteFileName: str) -> list:
+    parser = xml.etree.ElementTree.parse(absoluteFileName).getroot()  # type: ElementTree
+    methods = []
+    for methodTag in parser.findall(Tags.method):
+        description = MethodDescription()
+        for descriptionTag in methodTag.findall(Tags.description):
+            for nameTag in descriptionTag.findall(Tags.name):
+                description.name = nameTag.text
+            for typeTAg in descriptionTag.findall(Tags.type):
+                description.type = Type(typeTAg.text)
+            for paramsTag in descriptionTag.findall(Tags.parameters):
+                for paramTag in paramsTag.findall(Tags.param):
+                    parameter = Parameter()
+                    for nameTag in paramTag.findall(Tags.name):
+                        parameter.name = nameTag.text
+                    for typeTAg in paramTag.findall(Tags.type):
+                        parameter.type = Type(typeTAg.text)
+                        description.params.append(parameter)
+            for owner in descriptionTag.findall(Tags.owner):
+                description.owner = Type(owner.text)
+        contract = Contract()
+        for contractTag in methodTag.findall(Tags.contract):
+            for entersTag in contractTag.findall(Tags.enters):
+                for enterTag in entersTag.findall(Tags.enter):
+                    contract.enters.append(enterTag.text)
+            for exitsTag in contractTag.findall(Tags.exits):
+                for exitTag in exitsTag.findall(Tags.exit):
+                    contract.exits.append(exitTag.text)
+            for exitIdsTag in contractTag.findall(Tags.exitIds):
+                exitIds = {"id": None, "exits": []}
+                for exitIdTag in exitIdsTag.findall(Tags.exitId):
+                    print(exitIdTag)
+                    exitIds["id"] = int(exitIdTag.text)
+                for exitsTag in exitIdsTag.findall(Tags.exits):
+                    for exitTag in exitsTag.findall(Tags.exit):
+                        exitIds["exits"].append(exitTag.text)
+                if exitIds["id"] is not None:
+                    contract.exitIds.append(exitIds)
+        method = DaikonMethod()
+        method.description = description
+        method.contract = contract
+        methods.append(method)
+    return methods
+
+
+def unpackEmbeddings(path: str, postfix: str):
+    with open(path + '/JD2JDVs', 'rb') as f:
+        storage = pickle.load(f)  # type: generators.W2VStorage
+
+        emb_dim = storage.options.emb_dim
+        vocab_size = storage.options.vocab_size
+
+        w_in = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_in")
+        w_out = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_out")
+        global_step = tensorflow.Variable(0, name="global_step")
+
+        saver = tensorflow.train.Saver()
+
+        with tensorflow.Session() as sess:
+            saver.restore(sess, path + "/model.ckpt-" + postfix)
+            emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
+            embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
+            return lambda word: embeddings[word] if word in embeddings else embeddings['UNK'], embeddings
