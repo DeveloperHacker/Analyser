@@ -1,6 +1,6 @@
 import re
 
-from parts import JavaDoc
+from method import JavaDoc
 
 
 class Filter:

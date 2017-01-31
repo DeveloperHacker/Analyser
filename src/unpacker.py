@@ -5,8 +5,8 @@ from xml.etree.ElementTree import ElementTree
 import numpy
 import tensorflow
 
-import generators
-from parts import *
+import generator
+from method import *
 
 
 class Tags:
@@ -33,8 +33,8 @@ class Tags:
     exitIds = "exitIds"
 
 
-def unpackAstMethods(absoluteFileName: str) -> list:
-    parser = xml.etree.ElementTree.parse(absoluteFileName).getroot()  # type: ElementTree
+def unpackMethods(filepath: str) -> list:
+    parser = xml.etree.ElementTree.parse(filepath).getroot()  # type: ElementTree
     methods = []
     for methodTag in parser.findall(Tags.method):
         javaDoc = JavaDoc()
@@ -49,34 +49,7 @@ def unpackAstMethods(absoluteFileName: str) -> list:
                 javaDoc.sees.append(see.text)
             for throw in javaDocTag.findall(Tags.throws):
                 javaDoc.throws.append(throw.text)
-        description = MethodDescription()
-        for descriptionTag in methodTag.findall(Tags.description):
-            for nameTag in descriptionTag.findall(Tags.name):
-                description.name = nameTag.text
-            for typeTAg in descriptionTag.findall(Tags.type):
-                description.type = Type(typeTAg.text)
-            for paramsTag in descriptionTag.findall(Tags.parameters):
-                for paramTag in paramsTag.findall(Tags.param):
-                    parameter = Parameter()
-                    for nameTag in paramTag.findall(Tags.name):
-                        parameter.name = nameTag.text
-                    for typeTAg in paramTag.findall(Tags.type):
-                        parameter.type = Type(typeTAg.text)
-                        description.params.append(parameter)
-            for owner in descriptionTag.findall(Tags.owner):
-                description.owner = Type(owner.text)
-        method = AstMethod()
-        method.description = description
-        method.javaDoc = javaDoc
-        methods.append(method)
-    return methods
-
-
-def unpackDaikonMethods(absoluteFileName: str) -> list:
-    parser = xml.etree.ElementTree.parse(absoluteFileName).getroot()  # type: ElementTree
-    methods = []
-    for methodTag in parser.findall(Tags.method):
-        description = MethodDescription()
+        description = Description()
         for descriptionTag in methodTag.findall(Tags.description):
             for nameTag in descriptionTag.findall(Tags.name):
                 description.name = nameTag.text
@@ -103,23 +76,22 @@ def unpackDaikonMethods(absoluteFileName: str) -> list:
             for exitIdsTag in contractTag.findall(Tags.exitIds):
                 exitIds = {"id": None, "exits": []}
                 for exitIdTag in exitIdsTag.findall(Tags.exitId):
-                    print(exitIdTag)
                     exitIds["id"] = int(exitIdTag.text)
                 for exitsTag in exitIdsTag.findall(Tags.exits):
                     for exitTag in exitsTag.findall(Tags.exit):
                         exitIds["exits"].append(exitTag.text)
                 if exitIds["id"] is not None:
                     contract.exitIds.append(exitIds)
-        method = DaikonMethod()
+        method = Method()
         method.description = description
+        method.javaDoc = javaDoc
         method.contract = contract
         methods.append(method)
     return methods
 
-
 def unpackEmbeddings(path: str, postfix: str):
     with open(path + '/JD2JDVs', 'rb') as f:
-        storage = pickle.load(f)  # type: generators.W2VStorage
+        storage = pickle.load(f)  # type: generator.W2VStorage
 
         emb_dim = storage.options.emb_dim
         vocab_size = storage.options.vocab_size

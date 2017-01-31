@@ -90,7 +90,7 @@ ENV/
 # Rope project settings
 .ropeproject
 
-ast.sh
-daikon.sh
+*.sh
+*.cfg
 .idea/
 resources/

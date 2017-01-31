@@ -53,7 +53,7 @@ class Contract:
                 lines.append(_exit)
         return "\n".join(lines)
 
-class MethodDescription:
+class Description:
 
     def __init__(self):
         self.name = ""
@@ -69,20 +69,12 @@ class MethodDescription:
         return "{} {}.{}({})".format(tyre, owner, name, params)
 
 
-class AstMethod:
+class Method:
 
     def __init__(self):
-        self.description = MethodDescription()
+        self.description = Description()
         self.javaDoc = JavaDoc()
-
-    def __str__(self) -> str:
-        return "{}\n{}".format(str(self.javaDoc), str(self.description))
-
-class DaikonMethod:
-
-    def __init__(self):
-        self.description = MethodDescription()
         self.contract = Contract()
 
     def __str__(self) -> str:
-        return "{}\n{}".format(str(self.description), str(self.contract))
+        return "{}\n{}\n{}".format(str(self.javaDoc), str(self.description), str(self.contract))
