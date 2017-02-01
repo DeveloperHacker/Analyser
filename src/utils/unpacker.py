@@ -5,8 +5,7 @@ from xml.etree.ElementTree import ElementTree
 import numpy
 import tensorflow
 
-import generator
-from method import *
+from utils.method import *
 
 
 class Tags:
@@ -91,7 +90,7 @@ def unpackMethods(filepath: str) -> list:
 
 def unpackEmbeddings(path: str, postfix: str):
     with open(path + '/JD2JDVs', 'rb') as f:
-        storage = pickle.load(f)  # type: generator.W2VStorage
+        storage = pickle.load(f)
 
         emb_dim = storage.options.emb_dim
         vocab_size = storage.options.vocab_size

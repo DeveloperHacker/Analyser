@@ -33,6 +33,13 @@ class JavaDoc:
         tmp.extend(self.throws)
         return "/**\n{}\n */".format("\n".join(tmp))
 
+    def empty(self) -> bool:
+        return len(self.head) == 0 and \
+               len(self.params) == 0 and \
+               len(self.results) == 0 and \
+               len(self.results) == 0 and \
+               len(self.results) == 0
+
 class Contract:
 
     def __init__(self):
@@ -52,6 +59,11 @@ class Contract:
             for _exit in exitId["exits"]:
                 lines.append(_exit)
         return "\n".join(lines)
+
+    def empty(self) -> bool:
+        return len(self.enters) == 0 and \
+               len(self.exits) == 0 and \
+               len(self.exitIds) == 0
 
 class Description:
 

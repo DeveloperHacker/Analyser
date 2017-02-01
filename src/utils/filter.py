@@ -1,6 +1,6 @@
 import re
 
-from method import JavaDoc
+from utils.method import JavaDoc
 
 
 class Filter:
@@ -185,7 +185,7 @@ def applyFiltersForString(string: str, params: list) -> str:
 
 def applyFiltersForMethods(methods: list) -> list:
     for method in methods:
-        params = [param.name for param in method.params]
+        params = [param.name for param in method.description.params]
         javaDoc = method.javaDoc  # type: JavaDoc
         javaDoc.head = applyFiltersForString(javaDoc.head, params)
         javaDoc.params = [applyFiltersForString(param, params) for param in javaDoc.params]
