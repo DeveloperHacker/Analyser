@@ -4,7 +4,7 @@ from multiprocessing.pool import Pool
 
 from tensorflow.models.embedding import word2vec_optimized as word2vec
 from tensorflow.models.embedding.word2vec_optimized import Word2Vec
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans as _KMeans
 import _pickle as pickle
 import tensorflow as tf
 import numpy as np
@@ -54,13 +54,12 @@ def generateEmbeddings(savePath: str, dataPath: str, epochs: int, features: int,
         pickle.dump(W2VStorage(model._options, model._word2id, model._id2word), f)
 
 
-def generateClustersKMeans(data: dict, numClusters: int):
-    X = np.array(list(data.values()))
-    kmeans = KMeans(n_clusters=numClusters, random_state=0).fit(X)
+def KMeans(data: list, numClusters: int):
+    X = np.asarray([vector for _, vector in data])
+    kmeans = _KMeans(n_clusters=numClusters, random_state=0, n_jobs=-1).fit(X)
     clusters = [[] for _ in range(numClusters)]
-    for word, vector in data.items():
-        cluster = kmeans.predict([vector])
-        clusters[cluster[0]].append(word)
+    for label, vector in data:
+        clusters[kmeans.predict([vector])[0]].append(label)
     return clusters
 
 
@@ -68,7 +67,9 @@ def maximum(_, tar_value, data):
     result = [np.linalg.norm(tar_value - value, 2) for value in data.values()]
     return np.max(result)
 
+
 StateParam = namedtuple('StateParam', ['label', 'data'])
+
 
 def separate(tar_label, tar_value, data, divider, threshold) -> StateParam:
     result = {}
@@ -90,6 +91,7 @@ def XNeighbors(data: dict):
         print("[SEPARATE]")
         state = pool.starmap(separate, [(*pair, divider, threshold) for pair in state])
         return state
+
     return instance
 
 

@@ -1,4 +1,5 @@
 import re
+from multiprocessing import Pool
 
 from utils.method import JavaDoc, Method
 
@@ -203,4 +204,5 @@ def applyFiltersForMethod(method: Method) -> Method:
 
 
 def applyFiltersForMethods(methods: list) -> list:
-    return [applyFiltersForMethod(method) for method in methods]
+    pool = Pool()
+    return pool.map(applyFiltersForMethod, methods)

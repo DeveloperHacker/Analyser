@@ -1,9 +1,13 @@
+from collections import namedtuple
+from multiprocessing import Pool
+
+import _pickle as pickle
 import numpy as np
 import tensorflow as tf
 
 from utils import generator
 from utils.method import JavaDoc
-from variables import STATE_SIZE
+from variables import STATE_SIZE, RESOURCES, BATCHES
 
 
 class Tags:
@@ -72,7 +76,32 @@ def maximize(f: callable, a: float, b: float, epsilon=1e-6) -> tuple:
     x = (a + b) / 2
     return x, f(x)
 
-#
+
+Triplet = namedtuple("Triplet", ["left", "right", "distance"])
+
+
+def separate(tar_i, tar_value, data) -> list:
+    return [Triplet(tar_i, i, np.linalg.norm(tar_value - value, 2)) for i, value in enumerate(data) if tar_i < i]
+
+
+def chunks(l, n):
+    for i in range(0, len(l), n):
+        yield l[i:i + n]
+
+
+def batching(methods: list, cluster_size: int):
+    num_data = len(methods)
+    num_clusters = num_data // cluster_size
+    docs = [join(method.javaDoc) for i, method in enumerate(methods)]
+    vectors = [(i, vectorization(joined)) for i, joined in enumerate(docs)]
+    clusters = generator.KMeans(vectors, num_clusters)
+    idx_batches = [chunk for cluster in clusters for chunk in chunks(cluster, cluster_size) if
+                   len(chunk) == cluster_size]
+    print("%d/%d" % (len(idx_batches) * cluster_size, num_data))
+    batches = [[docs[i] for i in idx_batch] for idx_batch in idx_batches]
+    return batches
+
+
 # def cluster(methods: list, cluster_size: int):
 #     num_data = len(methods)
 #     num_clusters = int(num_data / cluster_size)
@@ -103,9 +132,6 @@ def maximize(f: callable, a: float, b: float, epsilon=1e-6) -> tuple:
 #     print(len(relevant_indexes))
 
 
-
-
-
 def constructRNNNet(methods: list):
     lstm = tf.nn.rnn_cell.LSTMCell(STATE_SIZE)
     rnn = lambda batch, state_fw, state_bw: tf.nn.bidirectional_rnn(
@@ -115,5 +141,3 @@ def constructRNNNet(methods: list):
         initial_state_fw=state_fw,
         initial_state_bw=state_bw
     )
-    methods = [method for method in methods if not method.javaDoc.empty()]
-    # cluster(methods[:10], 2)
