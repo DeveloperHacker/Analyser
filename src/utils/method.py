@@ -21,6 +21,7 @@ class JavaDoc:
     def __init__(self):
         self.head = ""
         self.params = []
+        self.variables = []
         self.results = []
         self.sees = []
         self.throws = []
@@ -28,10 +29,11 @@ class JavaDoc:
     def __str__(self) -> str:
         tmp = [self.head]
         tmp.extend(self.params)
+        tmp.extend(self.variables)
         tmp.extend(self.results)
         tmp.extend(self.sees)
         tmp.extend(self.throws)
-        return "/**\n{}\n */".format("\n".join(tmp))
+        return "/**\n * {}\n **/".format("\n * ".join(tmp))
 
     def empty(self) -> bool:
         return len(self.head) == 0 and \

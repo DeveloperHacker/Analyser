@@ -1,11 +1,7 @@
 from utils import filter
 from utils import generator
 from utils import unpacker
-from mains.variables import SAVE, DATA, METHODS, SENTENCES, FILTERED
-
-EPOCHS = 500
-FEATURES = 100
-WINDOW = 5
+from variables import SAVE, DATA, METHODS, SENTENCES, FILTERED, EPOCHS, FEATURES, WINDOW
 
 if __name__ == '__main__':
     methods = unpacker.unpackMethods(METHODS)

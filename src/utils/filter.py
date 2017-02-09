@@ -1,13 +1,13 @@
 import re
 
-from utils.method import JavaDoc
+from utils.method import JavaDoc, Method
 
 
 class Filter:
     NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
     string = "@string"
-    tag = "@htmlTag"
+    tag = "@html"
     reference = "@reference"
     link = "@link"
     path = "@url"
@@ -60,9 +60,9 @@ class Filter:
     def isKeyWord(string) -> bool:
         for keyword in Filter.keywords:
             if keyword in string and string.index(keyword) == 0:
-                    diff = Filter.diff(string, keyword)
-                    if len(diff) == 0 or diff.isnumeric():
-                        return True
+                diff = Filter.diff(string, keyword)
+                if len(diff) == 0 or diff.isnumeric():
+                    return True
         return False
 
     @staticmethod
@@ -163,6 +163,11 @@ def filterFirstAndEndSpaces(string: str) -> str:
     return string
 
 
+def convert(name):
+    s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
 def applyFiltersForString(string: str, params: list) -> str:
     if len(string) == 0: return string
     string = filterStrings(string)
@@ -178,19 +183,24 @@ def applyFiltersForString(string: str, params: list) -> str:
     string = expandWordsAndSymbols(string)
     # string = filterMeaninglessSentences(string)
     string = unpackStableReduction(string)
+    string = string.lower()
     string = filterLongSpaces(string)
     string = filterFirstAndEndSpaces(string)
     return string
 
 
+def applyFiltersForMethod(method: Method) -> Method:
+    params = [param.name for param in method.description.params]
+    javaDoc = method.javaDoc  # type: JavaDoc
+    javaDoc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for i, name in enumerate(params)]
+    javaDoc.head = applyFiltersForString(javaDoc.head, params)
+    javaDoc.params = [applyFiltersForString(param, params) for param in javaDoc.params]
+    javaDoc.results = [applyFiltersForString(result, params) for result in javaDoc.results]
+    javaDoc.throws = [applyFiltersForString(throw, params) for throw in javaDoc.throws]
+    javaDoc.sees = [applyFiltersForString(see, params) for see in javaDoc.sees]
+    method.javaDoc = javaDoc
+    return method
+
+
 def applyFiltersForMethods(methods: list) -> list:
-    for method in methods:
-        params = [param.name for param in method.description.params]
-        javaDoc = method.javaDoc  # type: JavaDoc
-        javaDoc.head = applyFiltersForString(javaDoc.head, params)
-        javaDoc.params = [applyFiltersForString(param, params) for param in javaDoc.params]
-        javaDoc.results = [applyFiltersForString(result, params) for result in javaDoc.results]
-        javaDoc.throws = [applyFiltersForString(throw, params) for throw in javaDoc.throws]
-        javaDoc.sees = [applyFiltersForString(see, params) for see in javaDoc.sees]
-        method.javaDoc = javaDoc
-    return methods
+    return [applyFiltersForMethod(method) for method in methods]

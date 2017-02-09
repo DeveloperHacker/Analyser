@@ -1,17 +1,12 @@
-from utils import unpacker
+from utils import constructor
 from utils import filter
-from mains.variables import METHODS
+from utils import unpacker
+from variables import METHODS
 
 if __name__ == '__main__':
+    print("unpack")
     methods = unpacker.unpackMethods(METHODS)
-    # for method in methods:
-    #     if not method.javaDoc.empty():
-    #         print(method.javaDoc)
-    #         print(method.description)
-    #         print()
+    print("filter")
     methods = filter.applyFiltersForMethods(methods)
-    for method in methods:
-        if not method.javaDoc.empty():
-            print(method.javaDoc)
-            print(method.description)
-            print()
+    print("construct")
+    rnn = constructor.constructRNNNet(methods)
