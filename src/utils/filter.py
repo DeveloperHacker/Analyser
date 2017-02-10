@@ -22,6 +22,7 @@ class Filter:
     param = "@param"
     result = "@return"
     see = "@see"
+    next = "@next"
 
     keywords = {
         string,

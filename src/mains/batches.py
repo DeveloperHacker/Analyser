@@ -13,5 +13,6 @@ if __name__ == '__main__':
     print("batches")
     methods = [method for method in methods if not method.javaDoc.empty()]
     batches = constructor.batching(methods, BATCH_SIZE)
+    print("pickle")
     with open(BATCHES, "wb") as file:
         pickle.dump(batches, file)
