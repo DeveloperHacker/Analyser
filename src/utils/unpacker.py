@@ -88,8 +88,8 @@ def unpackMethods(filepath: str) -> list:
         methods.append(method)
     return methods
 
-def unpackEmbeddings(path: str, postfix: str):
-    with open(path + '/JD2JDVs', 'rb') as f:
+def unpackEmbeddings(storage_path: str, model_path: str):
+    with open(storage_path, 'rb') as f:
         storage = pickle.load(f)
 
         emb_dim = storage.options.emb_dim
@@ -102,7 +102,7 @@ def unpackEmbeddings(path: str, postfix: str):
         saver = tensorflow.train.Saver()
 
         with tensorflow.Session() as sess:
-            saver.restore(sess, path + "/model.ckpt-" + postfix)
+            saver.restore(sess, model_path)
             emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
             embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
-            return lambda word: embeddings[word] if word in embeddings else embeddings['UNK'], embeddings
+        return embeddings

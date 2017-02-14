@@ -22,7 +22,6 @@ class Filter:
     param = "@param"
     result = "@return"
     see = "@see"
-    next = "@next"
 
     keywords = {
         string,
@@ -97,7 +96,8 @@ def filterPaths(string: str) -> str:
 
 
 def filterURLs(string: str) -> str:
-    return re.sub(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))", " %s " % Filter.url, string)
+    return re.sub(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))",
+                  " %s " % Filter.url, string)
 
 
 def filterParamNames(string: str, params: list) -> str:
@@ -191,10 +191,23 @@ def applyFiltersForString(string: str, params: list) -> str:
     return string
 
 
+def join(javaDoc: JavaDoc) -> list:
+    joined = [
+        ("head", javaDoc.head),
+        ("params", " ".join(javaDoc.params)),
+        ("variables", " ".join(javaDoc.variables)),
+        ("results", " ".join(javaDoc.results)),
+        # ("sees", " ".join(javaDoc.sees)),
+        # ("throws", " ".join(javaDoc.throws))
+    ]
+    return joined
+
+
 def applyFiltersForMethod(method: Method) -> Method:
     params = [param.name for param in method.description.params]
     javaDoc = method.javaDoc  # type: JavaDoc
-    javaDoc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for i, name in enumerate(params)]
+    javaDoc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
+                         i, name in enumerate(params)]
     javaDoc.head = applyFiltersForString(javaDoc.head, params)
     javaDoc.params = [applyFiltersForString(param, params) for param in javaDoc.params]
     javaDoc.results = [applyFiltersForString(result, params) for result in javaDoc.results]
@@ -205,5 +218,8 @@ def applyFiltersForMethod(method: Method) -> Method:
 
 
 def applyFiltersForMethods(methods: list) -> list:
-    pool = Pool()
-    return pool.map(applyFiltersForMethod, methods)
+    with Pool() as pool:
+        methods = pool.map(applyFiltersForMethod, methods)
+        methods = [method for method in methods if not method.javaDoc.empty()]
+        joined = pool.map(join, (method.javaDoc for method in methods))
+    return joined
