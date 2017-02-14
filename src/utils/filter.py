@@ -22,6 +22,7 @@ class Filter:
     param = "@param"
     result = "@return"
     see = "@see"
+    next = "@next"
 
     keywords = {
         string,
@@ -38,7 +39,8 @@ class Filter:
         head,
         param,
         result,
-        see
+        see,
+        next
     }
 
     punctuation = {
@@ -194,11 +196,11 @@ def applyFiltersForString(string: str, params: list) -> str:
 def join(javaDoc: JavaDoc) -> list:
     joined = [
         ("head", javaDoc.head),
-        ("params", " ".join(javaDoc.params)),
-        ("variables", " ".join(javaDoc.variables)),
-        ("results", " ".join(javaDoc.results)),
-        # ("sees", " ".join(javaDoc.sees)),
-        # ("throws", " ".join(javaDoc.throws))
+        ("params", (" %s " % Filter.next).join(javaDoc.params)),
+        ("variables", (" %s " % Filter.next).join(javaDoc.variables)),
+        ("results", (" %s " % Filter.next).join(javaDoc.results)),
+        # ("sees", (" %s " % Filter.next).join(javaDoc.sees)),
+        # ("throws", (" %s " % Filter.next).join(javaDoc.throws))
     ]
     return joined
 
@@ -217,9 +219,13 @@ def applyFiltersForMethod(method: Method) -> Method:
     return method
 
 
-def applyFiltersForMethods(methods: list) -> list:
+def isNotEmpty(method: Method) -> bool:
+    return not method.javaDoc.empty()
+
+
+def applyFiltersForMethods(methods: list, filtrator=isNotEmpty) -> list:
     with Pool() as pool:
         methods = pool.map(applyFiltersForMethod, methods)
-        methods = [method for method in methods if not method.javaDoc.empty()]
+        methods = [method for method in methods if filtrator(method)]
         joined = pool.map(join, (method.javaDoc for method in methods))
     return joined

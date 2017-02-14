@@ -16,6 +16,6 @@ if __name__ == '__main__':
     data = generator.vectorization(docs, embeddings)
     with open(VEC_METHODS, "wb") as file:
         pickle.dump(data, file)
-    batches = batcher.batching(data, BATCH_SIZE)
+    batches = batcher.batching(data, BATCH_SIZE, [MAX_ENCODE_SEQUENCE])
     with open(BATCHES, "wb") as file:
         pickle.dump(batches, file)
