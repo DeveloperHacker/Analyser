@@ -11,7 +11,7 @@ if __name__ == '__main__':
     docs = filter.applyFiltersForMethods(methods)
     with open(FILTERED, "w") as file:
         file.write("\n".join((text for doc in docs for label, text in doc)))
-    generator.generateEmbeddings(DATA_SETS, EMB_MODEL, EMB_STORAGE, FILTERED, EPOCHS, FEATURES, WINDOW)
+    generator.generateEmbeddings(DATA_SETS, EMB_MODEL, EMB_STORAGE, FILTERED, EMB_EPOCHS, FEATURES, WINDOW)
     embeddings = unpacker.unpackEmbeddings(EMB_STORAGE, EMB_MODEL)
     data = generator.vectorization(docs, embeddings)
     with open(VEC_METHODS, "wb") as file:

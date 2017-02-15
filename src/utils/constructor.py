@@ -64,7 +64,7 @@ def buildRNN(
         emb_size: int = FEATURES,
         input_length: int = MAX_ENCODE_SEQUENCE,
         output_length: int = MAX_DECODE_SEQUENCE,
-        epoches: int = EPOCHS,
+        epoches: int = SEQ2SEQ_EPOCHS,
         save_path: str = SEQ2SEQ_MODEL,
         log_path: str = SEQ2SEQ_LOG
 ):
