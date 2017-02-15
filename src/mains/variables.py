@@ -1,6 +1,4 @@
-import os
-
-RESOURCES = os.getcwd() + "/../../resources"
+RESOURCES = "resources"
 
 DATA_SETS = RESOURCES + "/data_sets"
 SENTENCES = DATA_SETS + "/sentences.txt"
@@ -17,6 +15,7 @@ EMB_STORAGE = EMB + "/model.storage"
 
 SEQ2SEQ = NETS + "/seq2seq"
 SEQ2SEQ_MODEL = SEQ2SEQ + "/model.ckpt"
+SEQ2SEQ_LOG = SEQ2SEQ + "/train.log"
 
 EPOCHS = 500
 FEATURES = 100

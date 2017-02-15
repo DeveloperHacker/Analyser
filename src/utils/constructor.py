@@ -1,3 +1,7 @@
+import logging
+import sys
+
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 
@@ -11,7 +15,6 @@ def encoder(batch, sequence_length, state_size: int, initial_state_fw=None, init
     # weighs_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
     gru_fw = tf.nn.rnn_cell.GRUCell(state_size)
     gru_bw = tf.nn.rnn_cell.GRUCell(state_size)
-
     return bidirectional_rnn(
         cell_fw=gru_fw,
         cell_bw=gru_bw,
@@ -23,24 +26,34 @@ def encoder(batch, sequence_length, state_size: int, initial_state_fw=None, init
     )
 
 
-def decoder(inputs, attention_states, state_size: int, initial_state, initial_attention_state=False):
+def decoder(inputs, attention_states, state_size: int, initial_state, emb_size: int, initial_attention_state=False):
     # ToDo: use this initializers
     # alignment_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.001)
     # weighs_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
     gru = tf.nn.rnn_cell.GRUCell(state_size)
-    return tf.nn.seq2seq.attention_decoder(
+    W_shape = [state_size, emb_size]
+    B_shape = [emb_size]
+    W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="W_linear")
+    B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="B_linear")
+    decoder_outputs, state = tf.nn.seq2seq.attention_decoder(
         cell=gru,
         dtype=tf.float32,
         decoder_inputs=inputs,
         initial_state=initial_state,
         attention_states=attention_states,
         initial_state_attention=initial_attention_state,
-        loop_function=lambda prev, i: prev
+        loop_function=lambda prev, i: linear(prev, W, B)
     )
+    outputs = [linear(decoder_output, W, B) for decoder_output in decoder_outputs]
+    return outputs, state
+
+
+def linear(inp, W, B):
+    return tf.matmul(inp, W) + B
 
 
 def buildLoss(inputs, outputs):
-    errs = [tf.sqrt(tf.reduce_sum(tf.squared_difference(outputs[i], inp[0]))) for i, inp in enumerate(inputs)]
+    errs = [tf.sqrt(tf.reduce_sum(tf.squared_difference(outputs[i], inp[0]))) for i, inp in enumerate(inputs.values())]
     return tf.reduce_mean(errs)
 
 
@@ -52,7 +65,8 @@ def buildRNN(
         input_length: int = MAX_ENCODE_SEQUENCE,
         output_length: int = MAX_DECODE_SEQUENCE,
         epoches: int = EPOCHS,
-        save_path: str = SEQ2SEQ_MODEL
+        save_path: str = SEQ2SEQ_MODEL,
+        log_path: str = SEQ2SEQ_LOG
 ):
     assert batch_size > 0
     assert state_size > 0
@@ -62,8 +76,9 @@ def buildRNN(
     assert len(batches) > 0
     parts = batches[0].keys()
 
-    GO = tf.zeros([emb_size], name="GO")
-    PAD = tf.ones([emb_size], name="PAD")
+    GO = np.zeros([emb_size], dtype=np.float32)
+    PAD = np.ones([emb_size], dtype=np.float32)
+    INIT = np.zeros([batch_size, state_size], dtype=np.float32)
 
     vars_BATCH = {}
     vars_SEQ_SIZES = {}
@@ -79,10 +94,11 @@ def buildRNN(
     goes = tf.pack([GO for _ in range(batch_size)])
     decoder_inputs = [goes] + [goes for _ in range(output_length - 1)]
     attention_states = tf.pack(attention_states)
-    attention_states = tf.transpose(attention_states,[1,0,2])
+    attention_states = tf.transpose(attention_states, [1, 0, 2])
     var_INIT_DECODER_STATE = tf.placeholder(tf.float32, [batch_size, state_size], "initial_decoder_state")
-    res_OUTPUTS, res_DECODER_STATE = decoder(decoder_inputs, attention_states, state_size, var_INIT_DECODER_STATE)
+    res_OUTPUTS, _ = decoder(decoder_inputs, attention_states, state_size, var_INIT_DECODER_STATE, emb_size)
     loss = buildLoss(vars_BATCH, res_OUTPUTS)
+    train = tf.train.AdadeltaOptimizer().minimize(loss)
 
     feed_dicts = []
     for batch in batches:
@@ -90,21 +106,31 @@ def buildRNN(
         for label, (embs, text) in batch.items():
             assert len(embs) == batch_size
             assert len(text) == batch_size
-            assert all([[len(emb) <= input_length for emb in embs]])
-            feed_dict[vars_BATCH[label]] = [emb + [PAD for _ in range(input_length - len(emb))] for emb in embs]
-            feed_dict[vars_SEQ_SIZES[label]] = [len(emb) for emb in embs]
-        feed_dict[var_INIT_DECODER_STATE] = tf.zeros([batch_size, state_size])
+            assert all([len(emb) <= input_length for emb in embs])
+            vars_BATCH_label = vars_BATCH[label]
+            for var_BATCH in vars_BATCH_label:
+                feed_dict[var_BATCH] = []
+            for emb in embs:
+                line = emb + [PAD for _ in range(input_length - len(emb))]
+                for i, word in enumerate(line):
+                    feed_dict[vars_BATCH_label[i]].append(word)
+            feed_dict[vars_SEQ_SIZES[label]] = tuple(len(emb) for emb in embs)
+        feed_dict[var_INIT_DECODER_STATE] = INIT
         feed_dicts.append(feed_dict)
 
     figure = Figure(xauto=True)
+    logging.basicConfig(level=logging.INFO, filename=log_path)
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     with tf.Session() as session:
         session.run(tf.initialize_all_variables())
         for epoch in range(epoches):
-            err = 0
+            error = 0
             for feed_dict in feed_dicts:
-                err += session.run(loss, feed_dict=feed_dict)
-            err /= len(feed_dicts)
-            figure.plot(epoch, err)
+                local_err, _ = session.run((loss, train), feed_dict=feed_dict)
+                error += local_err
+            error /= len(feed_dicts)
+            figure.plot(epoch, error)
+            logging.info("Epoch: %4d Error: %5.4f" % (epoch, error))
         saver = tf.train.Saver()
         saver.save(session, save_path)
     figure.close()

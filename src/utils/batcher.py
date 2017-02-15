@@ -1,4 +1,5 @@
 import numpy as np
+
 from src.utils import generator
 
 
@@ -41,22 +42,24 @@ def chunks(line, n):
         yield line[i:i + n]
 
 
-def batching(docs: list, cluster_size: int, basket_sizes: list):
+def throwing(docs: list, basket_sizes: list):
     basket_sizes = list(sorted(basket_sizes))
     baskets = {basket: [] for basket in basket_sizes}
     for doc in docs:
         for i, right in enumerate(basket_sizes):
             left = basket_sizes[i - 1] if i > 0 else 0
-            if left < len(doc) < right:
+            if left < max([len(embs) for label, (embs, text) in doc]) < right:
                 baskets[right].append(doc)
-    batches = {basket: [] for basket in basket_sizes}
-    for label, docs in baskets.items():
-        num_data = len(docs)
-        num_clusters = num_data // cluster_size
-        vectors = [(i, vector(doc)) for i, doc in enumerate(docs)]
-        clusters = generator.KMeans(vectors, num_clusters)
-        idx_batches = [chunk for cluster in clusters for chunk in chunks(cluster, cluster_size) if
-                       len(chunk) == cluster_size]
-        batches[label] = [[docs[i] for i in idx_batch] for idx_batch in idx_batches]
-        batches[label] = [reshape(batch) for batch in batches[label]]
+    return baskets
+
+
+def batching(docs: list, cluster_size: int):
+    num_data = len(docs)
+    num_clusters = num_data // cluster_size
+    vectors = [(i, vector(doc)) for i, doc in enumerate(docs)]
+    clusters = generator.KMeans(vectors, num_clusters)
+    idx_batches = [chunk for cluster in clusters for chunk in chunks(cluster, cluster_size) if
+                   len(chunk) == cluster_size]
+    batches = [[docs[i] for i in idx_batch] for idx_batch in idx_batches]
+    batches = [reshape(batch) for batch in batches]
     return batches
