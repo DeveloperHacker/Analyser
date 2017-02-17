@@ -6,6 +6,7 @@ import numpy
 import tensorflow
 
 from utils.method import *
+from variables import EMB_STORAGE, EMB_MODEL
 
 
 class Tags:
@@ -88,8 +89,8 @@ def unpackMethods(filepath: str) -> list:
         methods.append(method)
     return methods
 
-def unpackEmbeddings(storage_path: str, model_path: str):
-    with open(storage_path, 'rb') as f:
+def unpackEmbeddings():
+    with open(EMB_STORAGE, 'rb') as f:
         storage = pickle.load(f)
 
         emb_dim = storage.options.emb_dim
@@ -102,7 +103,7 @@ def unpackEmbeddings(storage_path: str, model_path: str):
         saver = tensorflow.train.Saver()
 
         with tensorflow.Session() as sess:
-            saver.restore(sess, model_path)
+            saver.restore(sess, EMB_MODEL)
             emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
             embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
         return embeddings
