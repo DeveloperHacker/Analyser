@@ -2,6 +2,7 @@ import re
 from multiprocessing import Pool
 
 from utils.method import JavaDoc, Method
+from utils.wrapper import trace
 
 
 class Filter:
@@ -232,7 +233,7 @@ def applyFiltersForMethod(method: Method) -> Method:
 def isNotEmpty(method: Method) -> bool:
     return not method.javaDoc.empty()
 
-
+@trace
 def applyFiltersForMethods(methods: list, filtrator=isNotEmpty) -> list:
     with Pool() as pool:
         methods = pool.map(applyFiltersForMethod, methods)

@@ -6,13 +6,13 @@ FILTERED = DATA_SETS + "/filtered.txt"
 BATCHES = DATA_SETS + "/batches.pickle"
 METHODS = DATA_SETS + "/methods.xml"
 VEC_METHODS = DATA_SETS + "/methods.pickle"
-EMBEDDINGS = DATA_SETS + "/embeddings.pickle"
+EMBEDDINGS = DATA_SETS + "/word2vec.pickle"
 
 NETS = RESOURCES + "/nets"
 
-EMB = NETS + "/embeddings"
-EMB_MODEL = EMB + "/model.ckpt"
-EMB_STORAGE = EMB + "/model.storage"
+WORD2VEC = NETS + "/word2vec"
+WORD2VEC_MODEL = WORD2VEC + "/model.ckpt"
+WORD2VEC_LOG = WORD2VEC + "/train.log"
 
 SEQ2SEQ = NETS + "/seq2seq"
 SEQ2SEQ_MODEL = SEQ2SEQ + "/model.ckpt"

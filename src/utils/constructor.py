@@ -3,20 +3,21 @@ import logging
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
-
 from utils.Figure import Figure
-from utils.rnn import bidirectional_rnn
+from utils.rnn import static_bidirectional_rnn
 from utils.wrapper import sigint, SIGINTException, trace
 from variables import *
+from tensorflow.contrib.rnn.python.ops.core_rnn_cell_impl import GRUCell
+from tensorflow.contrib.legacy_seq2seq.python.ops.seq2seq import attention_decoder
 
 
 @trace
 def encoder(batch, sequence_length, state_size: int, initial_state_fw=None, initial_state_bw=None):
     # ToDo: use this initializer
     # weighs_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
-    gru_fw = tf.nn.rnn_cell.GRUCell(state_size)
-    gru_bw = tf.nn.rnn_cell.GRUCell(state_size)
-    return bidirectional_rnn(
+    gru_fw = GRUCell(state_size)
+    gru_bw = GRUCell(state_size)
+    return static_bidirectional_rnn(
         cell_fw=gru_fw,
         cell_bw=gru_bw,
         inputs=batch,
@@ -32,13 +33,13 @@ def decoder(inputs, attention_states, state_size: int, initial_state, emb_size: 
     # ToDo: use this initializers
     # alignment_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.001)
     # weighs_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
-    gru = tf.nn.rnn_cell.GRUCell(state_size)
+    gru = GRUCell(state_size)
     W_shape = [state_size, emb_size]
     B_shape = [emb_size]
     with vs.variable_scope("Linear"):
         W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="Matrix")
         B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="Bias")
-    decoder_outputs, state = tf.nn.seq2seq.attention_decoder(
+    decoder_outputs, state = attention_decoder(
         cell=gru,
         dtype=tf.float32,
         decoder_inputs=inputs,
@@ -65,7 +66,7 @@ def buildLoss(inputs, outputs, parts: dict):
 
 
 def buildL2Loss():
-    variables = [var for var in tf.all_variables() if var.name in REGULARIZATION_VARIABLES]
+    variables = [var for var in tf.global_variables() if var.name in REGULARIZATION_VARIABLES]
     return tf.reduce_sum([tf.nn.l2_loss(var) for var in variables])
 
 
@@ -78,7 +79,7 @@ def trainRNN(fetches: tuple, feed_dicts: list, restore: bool = False):
             if restore:
                 saver.restore(session, SEQ2SEQ_MODEL)
             else:
-                session.run(tf.initialize_all_variables())
+                session.run(tf.global_variables_initializer())
             for epoch in range(SEQ2SEQ_EPOCHS):
                 loss = 0
                 l2_loss = 0
@@ -116,11 +117,11 @@ def buildRNN(parts: dict):
         vars_SEQ_SIZES[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "sequence_sizes_{}".format(label))
         with vs.variable_scope(label):
             _, output_states_fw, output_states_bw = encoder(vars_BATCH[label], vars_SEQ_SIZES[label], STATE_SIZE)
-        attention_states.append(tf.concat(1, [output_states_fw[0], output_states_bw[-1]]))
-        attention_states.append(tf.concat(1, [output_states_fw[-1], output_states_bw[0]]))
-    goes = tf.pack([GO for _ in range(BATCH_SIZE)])
+        attention_states.append(tf.concat(axis=1, values=[output_states_fw[0], output_states_bw[-1]]))
+        attention_states.append(tf.concat(axis=1, values=[output_states_fw[-1], output_states_bw[0]]))
+    goes = tf.stack([GO for _ in range(BATCH_SIZE)])
     decoder_inputs = [goes] + [goes for _ in range(MAX_DECODE_SEQUENCE - 1)]
-    attention_states = tf.pack(attention_states)
+    attention_states = tf.stack(attention_states)
     attention_states = tf.transpose(attention_states, [1, 0, 2])
     var_INIT_DECODER_STATE = tf.placeholder(tf.float32, [BATCH_SIZE, STATE_SIZE], "initial_decoder_state")
     res_OUTPUTS, _ = decoder(decoder_inputs, attention_states, STATE_SIZE, var_INIT_DECODER_STATE, EMB_SIZE)

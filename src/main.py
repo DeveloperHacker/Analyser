@@ -2,30 +2,32 @@ import argparse
 import logging
 import sys
 
-import embeddings
 import seq2seq
-from variables import RESOURCES
+import word2vec
+from variables import *
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--version", action='version', version='JavaDocs Analyser 0.0.1')
-    parser.add_argument("--embeddings", nargs="?", choices=["train", "cluster"], const=True, default=False)
-    parser.add_argument("--seq2seq", nargs="?", choices=["train", "continue", "test"], const=True, default=False)
+    parser.add_argument("--word2vec", nargs="?", choices=["train", "cluster"], const=True, default=False)
+    parser.add_argument("--seq2seq", nargs="?", choices=["train", "restore", "test"], const=True, default=False)
     parser.add_argument("--res", nargs="?", help="path to resources folder")
     args = parser.parse_args(sys.argv[1:])
     RESOURCES = args.res or RESOURCES
 
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    if args.embeddings:
-        if "train" == args.embeddings:
-            embeddings.generate()
-        elif "cluster" == args.embeddings:
-            embeddings.cluster()
+    if args.word2vec:
+        logging.basicConfig(level=logging.INFO, filename=WORD2VEC_LOG)
+        logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+        if "train" == args.word2vec:
+            word2vec.train()
+        elif "cluster" == args.word2vec:
+            word2vec.cluster()
     elif args.seq2seq:
+        logging.basicConfig(level=logging.INFO, filename=SEQ2SEQ_LOG)
+        logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
         if "train" == args.seq2seq:
             seq2seq.train()
-        elif "continue" == args.seq2seq:
+        elif "restore" == args.seq2seq:
             seq2seq.restore()
         elif "test" == args.seq2seq:
             seq2seq.test()

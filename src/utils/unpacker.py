@@ -1,12 +1,9 @@
 import xml.etree.ElementTree
 from xml.etree.ElementTree import ElementTree
 
-import numpy
-import tensorflow
-
-from utils import dumper
 from utils.method import *
-from variables import EMB_STORAGE, EMB_MODEL, METHODS
+from utils.wrapper import trace
+from variables import METHODS
 
 
 class Tags:
@@ -31,7 +28,7 @@ class Tags:
     exitId = "exitId"
     exitIds = "exitIds"
 
-
+@trace
 def unpackMethods() -> list:
     parser = xml.etree.ElementTree.parse(METHODS).getroot()  # type: ElementTree
     methods = []
@@ -87,23 +84,3 @@ def unpackMethods() -> list:
         method.contract = contract
         methods.append(method)
     return methods
-
-
-def unpackEmbeddings():
-    storage = dumper.load(EMB_STORAGE)
-
-    emb_dim = storage.options.emb_dim
-    vocab_size = storage.options.vocab_size
-
-    w_in = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_in")
-    w_out = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_out")
-    global_step = tensorflow.Variable(0, name="global_step")
-
-    saver = tensorflow.train.Saver()
-
-    with tensorflow.Session() as sess:
-        saver.restore(sess, EMB_MODEL)
-        emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
-        embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
-
-    return embeddings
