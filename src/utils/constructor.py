@@ -1,5 +1,4 @@
 import logging
-import sys
 
 import numpy as np
 import tensorflow as tf
@@ -7,10 +6,11 @@ from tensorflow.python.ops import variable_scope as vs
 
 from utils.Figure import Figure
 from utils.rnn import bidirectional_rnn
-from utils.wrapper import sigint, SIGINTException
+from utils.wrapper import sigint, SIGINTException, trace
 from variables import *
 
 
+@trace
 def encoder(batch, sequence_length, state_size: int, initial_state_fw=None, initial_state_bw=None):
     # ToDo: use this initializer
     # weighs_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
@@ -27,6 +27,7 @@ def encoder(batch, sequence_length, state_size: int, initial_state_fw=None, init
     )
 
 
+@trace
 def decoder(inputs, attention_states, state_size: int, initial_state, emb_size: int, initial_attention_state=False):
     # ToDo: use this initializers
     # alignment_initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.001)
@@ -54,17 +55,30 @@ def linear(inp, W, B):
     return tf.matmul(inp, W) + B
 
 
-def buildLoss(inputs, outputs):
-    errs = [tf.sqrt(tf.reduce_sum(tf.squared_difference(outputs[i], inp[0]))) for i, inp in enumerate(inputs.values())]
-    return tf.reduce_mean(errs)
+def tf_distance(vector1, vector2):
+    return tf.sqrt(tf.reduce_sum(tf.squared_difference(vector1, vector2), 1))
 
 
+def buildLoss(inputs, outputs, parts: dict):
+    errors = [tf_distance(outputs[parts[k]], inp[0]) for k, inp in inputs.items()]
+    return tf.reduce_mean(errors)
+
+
+def buildL2Loss():
+    variables = [var for var in tf.all_variables() if var.name in REGULARIZATION_VARIABLES]
+    return tf.reduce_sum([tf.nn.l2_loss(var) for var in variables])
+
+
+@trace
 @sigint
-def run(fetches: tuple, feed_dicts: list):
+def trainRNN(fetches: tuple, feed_dicts: list, restore: bool = False):
     with tf.Session() as session, Figure(xauto=True) as figure:
         saver = tf.train.Saver()
         try:
-            session.run(tf.initialize_all_variables())
+            if restore:
+                saver.restore(session, SEQ2SEQ_MODEL)
+            else:
+                session.run(tf.initialize_all_variables())
             for epoch in range(SEQ2SEQ_EPOCHS):
                 loss = 0
                 l2_loss = 0
@@ -89,14 +103,17 @@ PAD = np.ones([EMB_SIZE], dtype=np.float32)
 INIT = np.zeros([BATCH_SIZE, STATE_SIZE], dtype=np.float32)
 
 
-def buildRNN(parts: list):
+@trace
+def buildRNN(parts: dict):
     vars_BATCH = {}
     vars_SEQ_SIZES = {}
     attention_states = []
-    for label in parts:
-        vars_BATCH[label] = tuple(
-            tf.placeholder(tf.float32, [BATCH_SIZE, EMB_SIZE], "batch_%s" % label) for _ in range(MAX_ENCODE_SEQUENCE))
-        vars_SEQ_SIZES[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "sequence_sizes_%s" % label)
+    for label, index in parts.items():
+        vars_BATCH[label] = []
+        for i in range(MAX_ENCODE_SEQUENCE):
+            placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMB_SIZE], "batch_{}_{}".format(label, i))
+            vars_BATCH[label].append(placeholder)
+        vars_SEQ_SIZES[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "sequence_sizes_{}".format(label))
         with vs.variable_scope(label):
             _, output_states_fw, output_states_bw = encoder(vars_BATCH[label], vars_SEQ_SIZES[label], STATE_SIZE)
         attention_states.append(tf.concat(1, [output_states_fw[0], output_states_bw[-1]]))
@@ -107,12 +124,13 @@ def buildRNN(parts: list):
     attention_states = tf.transpose(attention_states, [1, 0, 2])
     var_INIT_DECODER_STATE = tf.placeholder(tf.float32, [BATCH_SIZE, STATE_SIZE], "initial_decoder_state")
     res_OUTPUTS, _ = decoder(decoder_inputs, attention_states, STATE_SIZE, var_INIT_DECODER_STATE, EMB_SIZE)
-    loss = buildLoss(vars_BATCH, res_OUTPUTS)
+    loss = buildLoss(vars_BATCH, res_OUTPUTS, parts)
     l2_loss = buildL2Loss() * L2_WEIGHT
-    train = tf.train.AdadeltaOptimizer().minimize(loss + l2_loss)
-    return (train, loss, l2_loss), (vars_BATCH, vars_SEQ_SIZES, var_INIT_DECODER_STATE)
+    train = tf.train.AdamOptimizer(beta1=0.95).minimize(loss + l2_loss)
+    return (train, loss, l2_loss), (vars_BATCH, vars_SEQ_SIZES, var_INIT_DECODER_STATE), res_OUTPUTS
 
 
+@trace
 def buildFeedDicts(batches, vars_BATCH, vars_SEQ_SIZES, var_INIT_DECODER_STATE):
     feed_dicts = []
     for batch in batches:
@@ -148,14 +166,44 @@ REGULARIZATION_VARIABLES = (
 )
 
 
-def buildL2Loss():
-    variables = [var for var in tf.all_variables() if var.name in REGULARIZATION_VARIABLES]
-    return tf.reduce_sum([tf.nn.l2_loss(var) for var in variables])
-
-
-def trainRNN(batches: list):
-    fetches, variables = buildRNN(batches[0].keys())
+@trace
+def initRNN(batches: list, parts: dict):
+    fetches, variables, results = buildRNN(parts)
     feed_dicts = buildFeedDicts(batches, *variables)
-    logging.basicConfig(level=logging.INFO, filename=SEQ2SEQ_LOG)
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
-    run(fetches, feed_dicts)
+    return (fetches, variables, results), feed_dicts
+
+
+def nearest(point, vectors):
+    i = np.argmin([np.linalg.norm(point - vector) for vector in vectors])
+    return vectors[i]
+
+
+@trace
+def testRNN(vars_BATCH, res_Loss, res_OUTPUTS, feed_dicts, embeddings, parts: dict):
+    embeddings = list(embeddings.values())
+    vars_FIRST = [None] * 4
+    for label, index in parts.items():
+        vars_FIRST[index] = vars_BATCH[label][0]
+    with tf.Session() as session:
+        saver = tf.train.Saver()
+        saver.restore(session, SEQ2SEQ_MODEL)
+        errors = []
+        roundLoss = []
+        loss = []
+        res_loss = []
+        for feed_dict in feed_dicts:
+            result = session.run(fetches=[res_OUTPUTS, res_Loss] + vars_FIRST, feed_dict=feed_dict)
+            outputs = result[0]
+            res_loss.append(result[1])
+            targets = result[2:]
+            assert len(targets) == 4
+            for output, target in zip(outputs[:4], targets):
+                for out, tar in zip(output, target):
+                    closest = nearest(out, embeddings)
+                    errors.append(np.linalg.norm(closest - tar) > 1e-6)
+                    roundLoss.append(np.linalg.norm(closest - tar))
+                    loss.append(np.linalg.norm(out - tar))
+        logging.info("Accuracy: {}%".format((1 - np.mean(errors)) * 100))
+        logging.info("RoundLoss: {}".format(np.mean(roundLoss)))
+        logging.info("Loss: {}".format(np.mean(loss)))
+        logging.info("ResLoss: {}".format(np.mean(res_loss)))

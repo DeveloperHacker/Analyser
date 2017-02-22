@@ -15,5 +15,5 @@ def XNeighbors(clusters: list, num_clusters=None):
     clusters.sort(key=lambda target: len(target.data), reverse=True)
     for i in range(0, round(num_clusters)):
         print("\"%s\":" % clusters[i].label)
-        for label, distance in clusters[i].data:
+        for label, distance in clusters[i].data.items():
             print("\t%.3f: \"%s\"" % (distance, label))

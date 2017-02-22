@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.utils import generator
+from utils import generator
 
 
 def reshape(batch: list):
@@ -16,8 +16,16 @@ def vector(data: list) -> np.ndarray:
     return np.asarray([len(embs) for label, (embs, text) in data])
 
 
-def vectorization(joined: list, embeddings: callable):
-    return [(label, [embeddings(word) for word in text.split(" ")]) for label, text in joined]
+def vectorization(joined: list, embeddings: dict):
+    emb = lambda word: embeddings[word] if word in embeddings else embeddings['UNK']
+    data = []
+    for doc in joined:
+        datum = []
+        for label, text in doc:
+            split = text.split(" ")
+            datum.append((label, ([emb(word) for word in split], split)))
+        data.append(datum)
+    return data
 
 
 def firstNMax(clusters: list, n: int):

@@ -205,6 +205,16 @@ def join(javaDoc: JavaDoc) -> list:
     return joined
 
 
+parts = {
+    "head": 2,
+    "params": 0,
+    "variables": 1,
+    "results": 3,
+    # "sees": 4,
+    # "throws": 5
+}
+
+
 def applyFiltersForMethod(method: Method) -> Method:
     params = [param.name for param in method.description.params]
     javaDoc = method.javaDoc  # type: JavaDoc

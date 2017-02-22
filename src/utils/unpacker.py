@@ -1,16 +1,15 @@
-import _pickle as pickle
 import xml.etree.ElementTree
 from xml.etree.ElementTree import ElementTree
 
 import numpy
 import tensorflow
 
+from utils import dumper
 from utils.method import *
-from variables import EMB_STORAGE, EMB_MODEL
+from variables import EMB_STORAGE, EMB_MODEL, METHODS
 
 
 class Tags:
-
     methods = "methods"
     method = "method"
     javaDoc = "javaDoc"
@@ -33,8 +32,8 @@ class Tags:
     exitIds = "exitIds"
 
 
-def unpackMethods(filepath: str) -> list:
-    parser = xml.etree.ElementTree.parse(filepath).getroot()  # type: ElementTree
+def unpackMethods() -> list:
+    parser = xml.etree.ElementTree.parse(METHODS).getroot()  # type: ElementTree
     methods = []
     for methodTag in parser.findall(Tags.method):
         javaDoc = JavaDoc()
@@ -89,21 +88,22 @@ def unpackMethods(filepath: str) -> list:
         methods.append(method)
     return methods
 
+
 def unpackEmbeddings():
-    with open(EMB_STORAGE, 'rb') as f:
-        storage = pickle.load(f)
+    storage = dumper.load(EMB_STORAGE)
 
-        emb_dim = storage.options.emb_dim
-        vocab_size = storage.options.vocab_size
+    emb_dim = storage.options.emb_dim
+    vocab_size = storage.options.vocab_size
 
-        w_in = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_in")
-        w_out = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_out")
-        global_step = tensorflow.Variable(0, name="global_step")
+    w_in = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_in")
+    w_out = tensorflow.Variable(tensorflow.zeros([vocab_size, emb_dim]), name="w_out")
+    global_step = tensorflow.Variable(0, name="global_step")
 
-        saver = tensorflow.train.Saver()
+    saver = tensorflow.train.Saver()
 
-        with tensorflow.Session() as sess:
-            saver.restore(sess, EMB_MODEL)
-            emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
-            embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
-        return embeddings
+    with tensorflow.Session() as sess:
+        saver.restore(sess, EMB_MODEL)
+        emb = w_in.eval(sess)  # type: numpy.multiarray.ndarray
+        embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in storage.word2id.items()}
+
+    return embeddings

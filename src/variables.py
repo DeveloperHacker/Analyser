@@ -6,6 +6,7 @@ FILTERED = DATA_SETS + "/filtered.txt"
 BATCHES = DATA_SETS + "/batches.pickle"
 METHODS = DATA_SETS + "/methods.xml"
 VEC_METHODS = DATA_SETS + "/methods.pickle"
+EMBEDDINGS = DATA_SETS + "/embeddings.pickle"
 
 NETS = RESOURCES + "/nets"
 
