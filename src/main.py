@@ -2,8 +2,8 @@ import argparse
 import logging
 import sys
 
-import seq2seq
-import word2vec
+import seq2seq.seq2seq as seq2seq
+import word2vec.word2vec as word2vec
 from variables import *
 
 if __name__ == '__main__':

@@ -49,7 +49,7 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "eval_data", None, "Analogy questions. "
                        "See README.md for how to get 'questions-words.txt'.")
-flags.DEFINE_integer("embedding_size", 200, "The embedding dimension size.")
+flags.DEFINE_integer("embedding_size", 200, "The word2vec dimension size.")
 flags.DEFINE_integer(
     "epochs_to_train", 15,
     "Number of epochs to train. Each epoch processes the training data once "
@@ -166,7 +166,7 @@ class Word2Vec(object):
             self.word2id[w] = i
 
         # Declare all variables we need.
-        # Input words embedding: [vocab_size, emb_dim]
+        # Input words word2vec: [vocab_size, emb_dim]
         w_in = tf.Variable(
             tf.random_uniform(
                 [opts.vocab_size,

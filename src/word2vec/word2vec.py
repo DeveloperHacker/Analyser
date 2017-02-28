@@ -1,8 +1,8 @@
 import numpy as np
 import tensorflow as tf
 
-from embedding import word2vec_optimized as word2vec
-from embedding.word2vec_optimized import Word2Vec
+from word2vec import word2vec_optimized as word2vec
+from word2vec.word2vec_optimized import Word2Vec
 from utils import batcher
 from utils import dumper
 from utils import filter
