@@ -7,29 +7,12 @@ from seq2seq.constructor import buildRNN, buildFeedDicts
 from utils import dumper, filter
 from utils.Figure import Figure
 from utils.wrapper import trace, sigint, SIGINTException
-from variables import EMBEDDINGS, SEQ2SEQ_MODEL, BATCHES, MAX_ENCODE_SEQUENCE, SEQ2SEQ_EPOCHS
-
-
-@trace
-def train():
-    (fetches, _, _), feed_dicts = init()
-    _train(fetches, feed_dicts, False)
-
-
-@trace
-def restore():
-    (fetches, _, _), feed_dicts = init()
-    _train(fetches, feed_dicts, True)
+from variables import EMBEDDINGS, SEQ2SEQ_MODEL, BATCHES, MAX_ENCODE_SEQUENCE, SEQ2SEQ_EPOCHS, RESOURCES
 
 
 @trace
 def test():
-    ((_, loss, _), (vars_BATCH, _, _), res_OUTPUTS), feed_dicts = init()
-    _test(vars_BATCH, loss, res_OUTPUTS, feed_dicts)
-
-
-@trace
-def _test(vars_BATCH, res_Loss, res_OUTPUTS, feed_dicts):
+    ((_, res_Loss, _), (vars_BATCH, _, _), res_OUTPUTS), feed_dicts = init()
     embeddings = dumper.load(EMBEDDINGS)
     embeddings = list(embeddings.values())
     vars_FIRST = [None] * 4
@@ -70,7 +53,9 @@ def init():
 
 
 @sigint
-def _train(fetches: tuple, feed_dicts: list, restore: bool = False):
+@trace
+def train(restore: bool = False):
+    (fetches, _, _), feed_dicts = init()
     with tf.Session() as session, Figure(xauto=True) as figure:
         saver = tf.train.Saver()
         try:

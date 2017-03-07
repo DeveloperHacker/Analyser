@@ -28,6 +28,6 @@ if __name__ == '__main__':
         if "train" == args.seq2seq:
             seq2seq.train()
         elif "restore" == args.seq2seq:
-            seq2seq.restore()
+            seq2seq.train(True)
         elif "test" == args.seq2seq:
             seq2seq.test()

@@ -54,6 +54,7 @@ def linear(inp, W, B):
 
 
 def distance(vector1, vector2):
+    # ToDo: return tf.norm(vector1 - vector2)
     return tf.sqrt(tf.reduce_sum(tf.squared_difference(vector1, vector2), 1))
 
 
@@ -104,7 +105,7 @@ def buildRNN(parts: dict):
 def buildFeedDicts(batches, vars_BATCH, vars_SEQ_SIZES, var_INIT_DECODER_STATE):
     embeddings = list(dumper.load(EMBEDDINGS).values())
     feed_dicts = []
-    for _ in range(10000):
+    for _ in range(100):
         feed_dict = {}
         for label in filter.parts.keys():
             vars_BATCH_label = vars_BATCH[label]
