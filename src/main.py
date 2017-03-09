@@ -4,16 +4,14 @@ import sys
 
 import seq2seq.seq2seq as seq2seq
 import word2vec.word2vec as word2vec
-from variables import *
+from variables.path import *
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--version", action='version', version='JavaDocs Analyser 0.0.1')
     parser.add_argument("--word2vec", nargs="?", choices=["train", "cluster"], const=True, default=False)
     parser.add_argument("--seq2seq", nargs="?", choices=["train", "restore", "test"], const=True, default=False)
-    parser.add_argument("--res", nargs="?", help="path to resources folder")
     args = parser.parse_args(sys.argv[1:])
-    RESOURCES = args.res or RESOURCES
 
     if args.word2vec:
         logging.basicConfig(level=logging.INFO, filename=WORD2VEC_LOG)

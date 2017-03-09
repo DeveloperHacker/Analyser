@@ -1,10 +1,10 @@
+import logging
 import signal
 import time
 
-import logging
 
-
-class SIGINTException(Exception): pass
+class SIGINTException(Exception):
+    pass
 
 
 def sigint(f):

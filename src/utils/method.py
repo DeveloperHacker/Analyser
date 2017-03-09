@@ -1,14 +1,12 @@
-
 class Type:
-
     def __init__(self, name: str):
         self.name = name
 
     def __str__(self) -> str:
         return self.name
 
-class Parameter:
 
+class Parameter:
     def __init__(self):
         self.name = ""
         self.type = Type("")
@@ -16,8 +14,8 @@ class Parameter:
     def __str__(self) -> str:
         return "{} {}".format(self.type, self.name)
 
-class JavaDoc:
 
+class JavaDoc:
     def __init__(self):
         self.head = ""
         self.params = []
@@ -42,8 +40,8 @@ class JavaDoc:
                len(self.results) == 0 and \
                len(self.results) == 0
 
-class Contract:
 
+class Contract:
     def __init__(self):
         self.enters = []
         self.exits = []
@@ -67,8 +65,8 @@ class Contract:
                len(self.exits) == 0 and \
                len(self.exitIds) == 0
 
-class Description:
 
+class Description:
     def __init__(self):
         self.name = ""
         self.type = Type("")
@@ -84,7 +82,6 @@ class Description:
 
 
 class Method:
-
     def __init__(self):
         self.description = Description()
         self.javaDoc = JavaDoc()

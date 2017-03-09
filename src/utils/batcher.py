@@ -2,6 +2,7 @@ import numpy as np
 
 from utils import generator
 
+
 def reshape(batch: list):
     new_batch = {"head": ([], []), "params": ([], []), "variables": ([], []), "results": ([], [])}
     for joined in batch:

@@ -3,7 +3,7 @@ from xml.etree.ElementTree import ElementTree
 
 from utils.method import *
 from utils.wrapper import trace
-from variables import METHODS
+from variables.path import METHODS
 
 
 class Tags:
@@ -27,6 +27,7 @@ class Tags:
     exits = "exits"
     exitId = "exitId"
     exitIds = "exitIds"
+
 
 @trace
 def unpackMethods() -> list:

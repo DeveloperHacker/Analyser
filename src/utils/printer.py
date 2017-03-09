@@ -1,5 +1,3 @@
-
-
 def KMeans(clusters: list, num_clusters=None):
     if num_clusters is None:
         num_clusters = len(clusters)

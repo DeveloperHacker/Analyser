@@ -3,58 +3,10 @@ from multiprocessing import Pool
 
 from utils.method import JavaDoc, Method
 from utils.wrapper import trace
+from variables.sintax import *
 
 
 class Filter:
-    NORMAL_CONCENTRATION_OF_WORDS = 0.7
-
-    string = "@string"
-    tag = "@html"
-    reference = "@reference"
-    link = "@link"
-    path = "@url"
-    url = "@url"
-    variable = "@variable"
-    invocation = "@invocation"
-    dotInvocation = "@dotInvocation"
-    number = "@number"
-    stableReduction = "@sr"
-    head = "@head"
-    param = "@param"
-    result = "@return"
-    see = "@see"
-    next = "@next"
-
-    keywords = {
-        string,
-        tag,
-        reference,
-        link,
-        path,
-        url,
-        variable,
-        invocation,
-        dotInvocation,
-        number,
-        stableReduction,
-        head,
-        param,
-        result,
-        see,
-        next
-    }
-
-    punctuation = {
-        ".",
-        ",",
-        ":",
-        ";",
-        "(",
-        ")",
-        "{",
-        "}"
-    }
-
     @staticmethod
     def diff(s1: str, s2: str) -> str:
         left = s1.index(s2)
@@ -62,7 +14,7 @@ class Filter:
 
     @staticmethod
     def isKeyWord(string) -> bool:
-        for keyword in Filter.keywords:
+        for keyword in TAGS:
             if keyword in string and string.index(keyword) == 0:
                 diff = Filter.diff(string, keyword)
                 if len(diff) == 0 or diff.isnumeric():
@@ -71,7 +23,7 @@ class Filter:
 
     @staticmethod
     def isPunctuation(string: str) -> bool:
-        return string in Filter.punctuation
+        return string in PUNCTUATION
 
     @staticmethod
     def wordsNumber(words: list) -> int:
@@ -79,33 +31,33 @@ class Filter:
 
 
 def filterStrings(string: str) -> str:
-    return re.sub("\".*?[^\\\]\"", " %s " % Filter.string, string)
+    return re.sub("\".*?[^\\\]\"", " %s " % string, string)
 
 
 def filterTags(string: str) -> str:
-    return re.sub("<[^>]*>", " %s " % Filter.tag, string)
+    return re.sub("<[^>]*>", " %s " % HTML, string)
 
 
 def filterRefs(string: str) -> str:
-    return re.sub("&\w+", " %s " % Filter.reference, string)
+    return re.sub("&\w+", " %s " % REFERENCE, string)
 
 
 def filterLinks(string: str) -> str:
-    return re.sub("(\{@|@\{)[^\}]*\}", " %s " % Filter.link, string)
+    return re.sub("(\{@|@\{)[^\}]*\}", " %s " % LINK, string)
 
 
 def filterPaths(string: str) -> str:
-    return re.sub(r"(/[a-zA-Z](\w|\.|\\\s)*){2,}", " %s " % Filter.path, string)
+    return re.sub(r"(/[a-zA-Z](\w|\.|\\\s)*){2,}", " %s " % PATH, string)
 
 
 def filterURLs(string: str) -> str:
     return re.sub(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))",
-                  " %s " % Filter.url, string)
+                  " %s " % URL, string)
 
 
 def filterParamNames(string: str, params: list) -> str:
     for i, param in enumerate(params):
-        string = string.replace(" %s " % param, " %s%d " % (Filter.variable, i))
+        string = string.replace(" %s " % param, " %s%d " % (VARIABLE, i))
     return string
 
 
@@ -114,18 +66,27 @@ def filterFunctionInvocation(string: str) -> str:
     word = r"(\@|[a-zA-Z])\w*"
     param = r"({0}{1}{0}\=)?{0}{1}".format(space, word)
     regex = r"{0}{1}({0}\(({2}({0}\,{2})*)?\))+".format(space, word, param)
-    return re.sub(regex, " %s " % Filter.invocation, string)
+    return re.sub(regex, " %s " % INVOCATION, string)
 
 
 def filterDotTuple(string: str) -> str:
     space = r"(\s|\t)*"
     word = r"(\@|[a-zA-Z])\w*"
     regex = r"{0}{1}(\.{1})+".format(space, word)
-    return re.sub(regex, " %s " % Filter.dotInvocation, string)
+    return re.sub(regex, " %s " % DOT_INVOCATION, string)
 
 
 def filterNumbers(string: str) -> str:
-    return re.sub(r"(\+|-)?(\d+(\.|,)?\d+|\d+)", " %s " % Filter.number, string)
+    return re.sub(r"(\+|-)?(\d+(\.|,)?\d+|\d+)", " %s " % NUMBER, string)
+
+
+def filterConstants(string: str) -> str:
+    string = re.sub(r"true", " %s " % TRUE, string)
+    string = re.sub(r"false", " %s " % FALSE, string)
+    string = re.sub(r"null", " %s " % NULL, string)
+    string = re.sub(r"nil", " %s " % NULL, string)
+    string = re.sub(r"none", " %s " % NULL, string)
+    return string
 
 
 def filterMeaninglessSentences(string: str) -> str:
@@ -136,7 +97,7 @@ def filterMeaninglessSentences(string: str) -> str:
         if ch == '.' and len(sentence) > 1:
             sentence = "".join(sentence)
             words = [word for word in sentence.split(" ") if len(word) > 0]
-            if (Filter.wordsNumber(words) / len(words)) > Filter.NORMAL_CONCENTRATION_OF_WORDS:
+            if (Filter.wordsNumber(words) / len(words)) > NORMAL_CONCENTRATION_OF_WORDS:
                 text.append(sentence)
             else:
                 print(sentence)
@@ -145,15 +106,15 @@ def filterMeaninglessSentences(string: str) -> str:
 
 
 def filterStableReduction(string: str) -> str:
-    return re.sub(r"([a-zA-Z])\.([a-zA-Z])\.", r" {}_\1_\2_ ".format(Filter.stableReduction), string)
+    return re.sub(r"([a-zA-Z])\.([a-zA-Z])\.", r" {}_\1_\2_ ".format(STABLE_REDUCTION), string)
 
 
 def unpackStableReduction(string: str) -> str:
-    return re.sub(r"{}_([^_]+)_([^_]+)_".format(Filter.stableReduction), r" \1.\2. ", string)
+    return re.sub(r"{}_([^_]+)_([^_]+)_".format(STABLE_REDUCTION), r" \1.\2. ", string)
 
 
 def expandWordsAndSymbols(string: str) -> str:
-    return re.sub(r"(\{})".format("|\\".join(Filter.punctuation)), r" \1 ", string)
+    return re.sub(r"(\{})".format("|\\".join(PUNCTUATION)), r" \1 ", string)
 
 
 def filterLongSpaces(string: str) -> str:
@@ -175,6 +136,7 @@ def convert(name):
 
 def applyFiltersForString(string: str, params: list) -> str:
     if len(string) == 0: return string
+    string = string.lower()
     string = filterStrings(string)
     string = filterTags(string)
     string = filterRefs(string)
@@ -182,13 +144,13 @@ def applyFiltersForString(string: str, params: list) -> str:
     string = filterStableReduction(string)
     string = filterURLs(string)
     string = filterNumbers(string)
+    string = filterConstants(string)
     string = filterParamNames(string, params)
     string = filterFunctionInvocation(string)
     # string = filterDotTuple(string)
     string = expandWordsAndSymbols(string)
     # string = filterMeaninglessSentences(string)
     string = unpackStableReduction(string)
-    string = string.lower()
     string = filterLongSpaces(string)
     string = filterFirstAndEndSpaces(string)
     return string
@@ -197,11 +159,11 @@ def applyFiltersForString(string: str, params: list) -> str:
 def join(javaDoc: JavaDoc) -> list:
     joined = [
         ("head", javaDoc.head),
-        ("params", (" %s " % Filter.next).join(javaDoc.params)),
-        ("variables", (" %s " % Filter.next).join(javaDoc.variables)),
-        ("results", (" %s " % Filter.next).join(javaDoc.results)),
-        # ("sees", (" %s " % Filter.next).join(javaDoc.sees)),
-        # ("throws", (" %s " % Filter.next).join(javaDoc.throws))
+        ("params", (" %s " % NEXT).join(javaDoc.params)),
+        ("variables", (" %s " % NEXT).join(javaDoc.variables)),
+        ("results", (" %s " % NEXT).join(javaDoc.results)),
+        # ("sees", (" %s " % next).join(javaDoc.sees)),
+        # ("throws", (" %s " % next).join(javaDoc.throws))
     ]
     return joined
 
@@ -232,6 +194,7 @@ def applyFiltersForMethod(method: Method) -> Method:
 
 def isNotEmpty(method: Method) -> bool:
     return not method.javaDoc.empty()
+
 
 @trace
 def applyFiltersForMethods(methods: list, filtrator=isNotEmpty) -> list:

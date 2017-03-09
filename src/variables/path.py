@@ -7,6 +7,7 @@ BATCHES = DATA_SETS + "/batches.pickle"
 METHODS = DATA_SETS + "/methods.xml"
 VEC_METHODS = DATA_SETS + "/methods.pickle"
 EMBEDDINGS = DATA_SETS + "/word2vec.pickle"
+CONTEXTS = DATA_SETS + "/contexts.pickle"
 
 NETS = RESOURCES + "/nets"
 
@@ -17,13 +18,3 @@ WORD2VEC_LOG = WORD2VEC + "/train.log"
 SEQ2SEQ = NETS + "/seq2seq"
 SEQ2SEQ_MODEL = SEQ2SEQ + "/model.ckpt"
 SEQ2SEQ_LOG = SEQ2SEQ + "/train.log"
-
-EMB_EPOCHS = 500
-SEQ2SEQ_EPOCHS = 2000
-EMB_SIZE = 100
-WINDOW = 7
-STATE_SIZE = 200
-BATCH_SIZE = 20
-MAX_ENCODE_SEQUENCE = 30
-MAX_DECODE_SEQUENCE = 10
-L2_WEIGHT = 0.0001

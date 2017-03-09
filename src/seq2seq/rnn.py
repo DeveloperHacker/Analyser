@@ -8,7 +8,6 @@ from tensorflow.python.ops import rnn_cell_impl
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.util import nest
 
-
 # noinspection PyProtectedMember
 _state_size_with_prefix = rnn_cell_impl._state_size_with_prefix
 # noinspection PyProtectedMember

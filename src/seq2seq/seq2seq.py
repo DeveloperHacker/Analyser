@@ -3,21 +3,27 @@ import logging
 import numpy as np
 import tensorflow as tf
 
-from seq2seq.constructor import buildRNN, buildFeedDicts
+from seq2seq import constructor
 from utils import dumper, filter
 from utils.Figure import Figure
 from utils.wrapper import trace, sigint, SIGINTException
-from variables import EMBEDDINGS, SEQ2SEQ_MODEL, BATCHES, MAX_ENCODE_SEQUENCE, SEQ2SEQ_EPOCHS, RESOURCES
+from variables.embeddings import EMBEDDINGS
+from variables.path import *
+from variables.train import *
+
+
+def closest(point, vectors):
+    i = np.argmin([np.linalg.norm(point - vector) for vector in vectors])
+    return vectors[i]
 
 
 @trace
 def test():
-    ((_, res_Loss, _), (vars_BATCH, _, _), res_OUTPUTS), feed_dicts = init()
-    embeddings = dumper.load(EMBEDDINGS)
-    embeddings = list(embeddings.values())
-    vars_FIRST = [None] * 4
+    embeddings = list(EMBEDDINGS)
+    ((_, _LOSS, _), (vars_BATCH, _, _), (_OUTPUTS, _)), feed_dicts = init()
+    _FIRST = [None] * 4
     for label, index in filter.parts.items():
-        vars_FIRST[index] = vars_BATCH[label][0]
+        _FIRST[index] = vars_BATCH[label][0]
     with tf.Session() as session:
         saver = tf.train.Saver()
         saver.restore(session, SEQ2SEQ_MODEL)
@@ -26,17 +32,16 @@ def test():
         loss = []
         res_loss = []
         for feed_dict in feed_dicts:
-            result = session.run(fetches=[res_OUTPUTS, res_Loss] + vars_FIRST, feed_dict=feed_dict)
+            result = session.run(fetches=[_OUTPUTS, _LOSS] + _FIRST, feed_dict=feed_dict)
             outputs = result[0]
             res_loss.append(result[1])
             targets = result[2:]
             assert len(targets) == 4
             for output, target in zip(outputs[:4], targets):
                 for out, tar in zip(output, target):
-                    i = np.argmin([np.linalg.norm(out - emb) for emb in embeddings])
-                    closest = embeddings[i]
-                    errors.append(np.linalg.norm(closest - tar) > 1e-6)
-                    roundLoss.append(np.linalg.norm(closest - tar))
+                    emb = closest(out, embeddings)
+                    errors.append(np.linalg.norm(emb - tar) > 1e-6)
+                    roundLoss.append(np.linalg.norm(emb - tar))
                     loss.append(np.linalg.norm(out - tar))
         logging.info("Accuracy: {}%".format((1 - np.mean(errors)) * 100))
         logging.info("RoundLoss: {}".format(np.mean(roundLoss)))
@@ -46,17 +51,18 @@ def test():
 
 @trace
 def init():
-    fetches, variables, results = buildRNN(filter.parts)
-    batches = dumper.load(BATCHES)[MAX_ENCODE_SEQUENCE]
-    feed_dicts = buildFeedDicts(batches, *variables)
-    return (fetches, variables, results), feed_dicts
+    inputs, outputs = constructor.build_rnn(filter.parts)
+    fetches = constructor.fetches(outputs[0])
+    batches = dumper.load(BATCHES)[INPUT_SIZE]
+    _feed_dicts = constructor.build_feed_dicts(batches, *inputs)
+    return (fetches, inputs, outputs), _feed_dicts
 
 
 @sigint
 @trace
 def train(restore: bool = False):
-    (fetches, _, _), feed_dicts = init()
-    with tf.Session() as session, Figure(xauto=True) as figure:
+    (fetches, _, _), _feed_dicts = init()
+    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
         saver = tf.train.Saver()
         try:
             if restore:
@@ -64,16 +70,20 @@ def train(restore: bool = False):
             else:
                 session.run(tf.global_variables_initializer())
             for epoch in range(SEQ2SEQ_EPOCHS):
-                loss = 0
-                l2_loss = 0
-                for feed_dict in feed_dicts:
-                    _, local_loss, local_l2_loss = session.run(fetches=fetches, feed_dict=feed_dict)
-                    loss += local_loss
-                    l2_loss += local_l2_loss
-                loss /= len(feed_dicts)
-                l2_loss /= len(feed_dicts)
-                figure.plot(epoch, loss)
-                logging.info("Epoch: %4d/%-4d; Loss: %5.4f; L2 loss: %5.4f" % (epoch, SEQ2SEQ_EPOCHS, loss, l2_loss))
+                losses = None
+                for feed_dict in _feed_dicts:
+                    _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
+                    if losses is None:
+                        losses = local_losses
+                    else:
+                        for i, loss in enumerate(local_losses):
+                            losses[i] += loss
+                for i, loss in enumerate(losses):
+                    losses[i] /= len(_feed_dicts)
+                string = " ".join(("%7.3f" % loss for loss in losses))
+                logging.info("Epoch: {:4d}/{:-4d} Losses: [{}]".format(epoch, SEQ2SEQ_EPOCHS, string))
+                if epoch > 10:
+                    figure.plot(epoch, losses[0])
                 if epoch % 50:
                     saver.save(session, SEQ2SEQ_MODEL)
         except SIGINTException:

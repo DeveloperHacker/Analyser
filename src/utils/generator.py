@@ -1,8 +1,10 @@
 from collections import namedtuple
 from multiprocessing.pool import Pool
-from utils.wrapper import trace
+
 import numpy as np
 from sklearn.cluster import KMeans as _KMeans
+
+from utils.wrapper import trace
 
 
 @trace
