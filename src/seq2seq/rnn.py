@@ -86,7 +86,6 @@ def static_rnn(cell, inputs, initial_state=None, dtype=None,
     if not inputs:
         raise ValueError("inputs must not be empty")
 
-    outputs = []
     states = []
     # Create a new scope in which the caching device is either
     # determined by the parent scope, or is set to place the cached
@@ -165,7 +164,7 @@ def static_rnn(cell, inputs, initial_state=None, dtype=None,
             call_cell = lambda: cell(input_, state)
             if sequence_length is not None:
                 # noinspection PyUnboundLocalVariable
-                (output, state) = _rnn_step(
+                (_, state) = _rnn_step(
                     time=time,
                     sequence_length=sequence_length,
                     min_sequence_length=min_sequence_length,
@@ -175,12 +174,11 @@ def static_rnn(cell, inputs, initial_state=None, dtype=None,
                     call_cell=call_cell,
                     state_size=cell.state_size)
             else:
-                (output, state) = call_cell()
+                (_, state) = call_cell()
 
-            outputs.append(output)
             states.append(state)
 
-        return outputs, states
+        return states
 
 
 def static_bidirectional_rnn(cell_fw, cell_bw, inputs,
@@ -240,27 +238,15 @@ def static_bidirectional_rnn(cell_fw, cell_bw, inputs,
     with vs.variable_scope(scope or "bidirectional_rnn"):
         # Forward direction
         with vs.variable_scope("fw") as fw_scope:
-            output_fw, states_fw = static_rnn(
+            states_fw = static_rnn(
                 cell_fw, inputs, initial_state_fw, dtype,
                 sequence_length, scope=fw_scope)
 
         # Backward direction
         with vs.variable_scope("bw") as bw_scope:
             reversed_inputs = _reverse_seq(inputs, sequence_length)
-            tmp, states_bw = static_rnn(
+            states_bw = static_rnn(
                 cell_bw, reversed_inputs, initial_state_bw,
                 dtype, sequence_length, scope=bw_scope)
 
-    output_bw = _reverse_seq(tmp, sequence_length)
-    # Concat each of the forward/backward outputs
-    flat_output_fw = nest.flatten(output_fw)
-    flat_output_bw = nest.flatten(output_bw)
-
-    flat_outputs = tuple(
-        array_ops.concat([fw, bw], 1)
-        for fw, bw in zip(flat_output_fw, flat_output_bw))
-
-    outputs = nest.pack_sequence_as(structure=output_fw,
-                                    flat_sequence=flat_outputs)
-
-    return outputs, states_fw, states_bw
+    return states_fw, states_bw

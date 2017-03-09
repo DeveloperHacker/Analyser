@@ -20,8 +20,10 @@ STABLE_REDUCTION = "@sr"
 HEAD = "@head"
 PARAMS = "@param"
 RETURN = "@return"
+VARIABLES = "@variables"
 SEE = "@see"
 THROW = "@throw"
+
 NEXT = "@next"
 
 EQUAL = "@equal"
@@ -35,7 +37,16 @@ NOP = "@nop"
 
 NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
-TAGS = {
+PARTS = (
+    HEAD[1:],
+    PARAMS[1:],
+    VARIABLES[1:],
+    RETURN[1:],
+    # SEE[1:],
+    # THROW[1:]
+)
+
+TAGS = (
     STRING,
     HTML,
     REFERENCE,
@@ -53,6 +64,6 @@ TAGS = {
     THROW,
     SEE,
     NEXT
-}
+)
 
 PUNCTUATION = (".", ",", ":", ";", "(", ")", "{", "}")

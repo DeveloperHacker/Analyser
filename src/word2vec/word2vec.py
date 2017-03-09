@@ -33,8 +33,8 @@ def train():
 def generate():
     word2vec.FLAGS.save_path = DATA_SETS
     word2vec.FLAGS.train_data = FILTERED
-    word2vec.FLAGS.epochs_to_train = EMB_EPOCHS
-    word2vec.FLAGS.embedding_size = EMB_SIZE
+    word2vec.FLAGS.epochs_to_train = WORD2VEC_EPOCHS
+    word2vec.FLAGS.embedding_size = EMBEDDING_SIZE
     word2vec.FLAGS.window_size = WINDOW
     options = word2vec.Options()
 
