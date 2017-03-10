@@ -1,6 +1,7 @@
 import numpy as np
 
 from utils import generator
+from utils.wrapper import trace
 
 
 def reshape(batch: list):
@@ -50,6 +51,7 @@ def chunks(line, n):
         yield line[i:i + n]
 
 
+@trace
 def throwing(docs: list, basket_sizes: list):
     basket_sizes = list(sorted(basket_sizes))
     baskets = {basket: [] for basket in basket_sizes}
@@ -61,7 +63,8 @@ def throwing(docs: list, basket_sizes: list):
     return baskets
 
 
-def batching(docs: list, cluster_size: int):
+@trace
+def build_butches(docs: list, cluster_size: int):
     num_data = len(docs)
     num_clusters = num_data // cluster_size
     vectors = [(i, vector(doc)) for i, doc in enumerate(docs)]

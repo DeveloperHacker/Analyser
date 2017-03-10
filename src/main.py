@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 
-import seq2seq.seq2seq as seq2seq
+import seq2seq.analyser
 import word2vec.word2vec as word2vec
 from variables.path import *
 
@@ -12,6 +12,11 @@ if __name__ == '__main__':
     parser.add_argument("--word2vec", nargs="?", choices=["train", "cluster"], const=True, default=False)
     parser.add_argument("--seq2seq", nargs="?", choices=["train", "restore", "test"], const=True, default=False)
     args = parser.parse_args(sys.argv[1:])
+
+    # with tf.Session() as session:
+    #     summary_writer = tf.summary.FileWriter(PATH, session.graph)
+    #     session.run(tf.global_variables_initializer())
+    #     summary_writer.close()
 
     if args.word2vec:
         logging.basicConfig(level=logging.INFO, filename=WORD2VEC_LOG)
@@ -24,8 +29,8 @@ if __name__ == '__main__':
         logging.basicConfig(level=logging.INFO, filename=SEQ2SEQ_LOG)
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
         if "train" == args.seq2seq:
-            seq2seq.train()
+            seq2seq.analyser.train()
         elif "restore" == args.seq2seq:
-            seq2seq.train(True)
+            seq2seq.analyser.train(True)
         elif "test" == args.seq2seq:
-            seq2seq.test()
+            seq2seq.analyser.test()

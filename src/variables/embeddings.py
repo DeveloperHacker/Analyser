@@ -35,6 +35,7 @@ DELIMITERS = (
 )
 
 TOKENS = CONSTANTS + OPERATORS + DELIMITERS
+NUM_TOKENS = len(TOKENS)
 
 GO = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
 PAD = np.ones([EMBEDDING_SIZE], dtype=np.float32)

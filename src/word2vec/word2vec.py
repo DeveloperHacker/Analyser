@@ -24,9 +24,6 @@ def train():
     dumper.dump(embeddings, EMBEDDINGS)
     data = batcher.vectorization(docs, embeddings)
     dumper.dump(data, VEC_METHODS)
-    baskets = batcher.throwing(data, [INPUT_SIZE])
-    batches = {basket: batcher.batching(data, BATCH_SIZE) for basket, data in baskets.items()}
-    dumper.dump(batches, BATCHES)
 
 
 @trace
