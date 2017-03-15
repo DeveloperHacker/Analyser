@@ -1,22 +1,5 @@
 import logging
-import signal
 import time
-
-
-class SIGINTException(Exception):
-    pass
-
-
-def sigint(f):
-    def wrapper(*args, **kwargs):
-        def handler(signum, frame):
-            raise SIGINTException()
-
-        signal.signal(signal.SIGINT, handler)
-        return f(*args, **kwargs)
-
-    return wrapper
-
 
 nested = 0
 
@@ -24,7 +7,7 @@ nested = 0
 def trace(f):
     def wrapper(*args, **kwargs):
         global nested
-        name = f.__name__
+        name = f.__module__ + "." + f.__name__
         shift = "│" * nested
         logging.info("{}╒Function \"{}\" is invoked".format(shift, name))
         clock = time.time()

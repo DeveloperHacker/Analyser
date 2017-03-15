@@ -1,17 +1,11 @@
 import numpy as np
 import tensorflow as tf
 
-from utils import batcher
-from utils import dumper
-from utils import filter
-from utils import generator
-from utils import printer
-from utils import unpacker
+from utils import batcher, dumper, filter, generator, printer, unpacker
 from utils.wrapper import trace
 from variables.path import *
 from variables.train import *
 from word2vec import word2vec_optimized as word2vec
-from word2vec.word2vec_optimized import Word2Vec
 
 
 @trace
@@ -36,7 +30,7 @@ def generate():
     options = word2vec.Options()
 
     with tf.Graph().as_default(), tf.Session() as session, tf.device("/cpu:0"):
-        model = Word2Vec(options, session)
+        model = word2vec.Word2Vec(options, session)
         for _ in range(options.epochs_to_train):
             model.train()
         model.saver.save(session, WORD2VEC_MODEL, )

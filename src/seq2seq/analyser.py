@@ -4,6 +4,7 @@ from seq2seq import q_function
 from seq2seq.seq2seq import *
 from utils import batcher, dumper
 from utils.Figure import Figure
+from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
@@ -38,6 +39,7 @@ def build_net(inputs: Inputs):
             B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="biases")
             output = tf.reshape(tf.stack(output), [BATCH_SIZE * OUTPUT_SIZE, EMBEDDING_SIZE])
             output = tf.nn.softmax(tf.reshape(tf.matmul(output, W) + B, [OUTPUT_SIZE, BATCH_SIZE, NUM_TOKENS]))
+            output = tf.unstack(output)
     return Outputs(output)
 
 
@@ -77,11 +79,11 @@ def build_placeholders():
 
 @trace
 def build_fetches(outputs: q_function.Outputs):
-    q = outputs.q
     with vs.variable_scope("loss"):
         trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "analyser")
         l2_loss = build_l2_loss(trainable_variables, ANALYSER_REGULARIZATION_VARIABLES)
-        loss = tf.sqrt(tf.square(Q_WEIGHT * q) + tf.square(L2_WEIGHT * l2_loss))
+        q = tf.reduce_mean(outputs.q)
+        loss = Q_WEIGHT * q + L2_WEIGHT * l2_loss
     with vs.variable_scope("optimiser"):
         optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
     return Fetches(optimise, loss, l2_loss, q)
@@ -107,34 +109,48 @@ def build():
     return (fetches, inputs, outputs), feed_dicts
 
 
-@sigint
+@trace
+def build_saver() -> tf.train.Saver:
+    trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "analyser")
+    saver = tf.train.Saver(var_list=trainable_variables)
+    return saver
+
+
 @trace
 def train(restore: bool = False):
     (fetches, _, _), feed_dicts = build()
+    with tf.Session() as session:
+        writer = tf.summary.FileWriter(ANALYSER_MODEL, session.graph)
+        writer.close()
+    exit(1)
     with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        saver = tf.train.Saver()
+        saver = None
         try:
+            session.run(tf.global_variables_initializer())
+            saver = q_function.build_saver()
+            saver.restore(session, Q_FUNCTION_MODEL)
+            saver = build_saver()
             if restore:
                 saver.restore(session, ANALYSER_MODEL)
-            else:
-                session.run(tf.global_variables_initializer())
-            saver.restore(session, Q_FUNCTION_MODEL)
             for epoch in range(ANALYSER_EPOCHS):
-                losses = [0.0] * (len(fetches) - 1)
+                losses = (0.0 for _ in range(len(fetches) - 1))
                 for feed_dict in feed_dicts:
                     _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
-                    for i, loss in enumerate(local_losses):
-                        losses[i] += loss
-                for i, loss in enumerate(losses):
-                    losses[i] /= len(feed_dicts)
-                string = " ".join(("%7.3f" % loss for loss in losses))
-                logging.info("Epoch: {:4d}/{:-4d} Losses: [{}]".format(epoch, ANALYSER_EPOCHS, string))
-                figure.plot(epoch, losses[0])
+                    losses = (local_losses[i] + loss for i, loss in enumerate(losses))
+                losses = (loss / len(feed_dicts) for loss in losses)
+                loss = next(losses)
+                l2_loss = next(losses)
+                q = next(losses)
+                logging.info("Epoch: {:4d}/{:-4d} Loss: {:.4f} L2Loss: {:.4f} Q: {:.4f}"
+                             .format(epoch, ANALYSER_EPOCHS, loss, l2_loss, q))
+                figure.plot(epoch, loss)
                 if epoch % 50:
                     saver.save(session, ANALYSER_MODEL)
         except SIGINTException:
             logging.error("SIGINT")
         finally:
+            if saver is None:
+                saver = build_saver()
             saver.save(session, ANALYSER_MODEL)
 
 

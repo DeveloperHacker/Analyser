@@ -2,7 +2,7 @@ from collections import namedtuple
 
 from seq2seq import analyser
 from seq2seq.seq2seq import *
-from utils.Figure import Figure
+from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
@@ -25,7 +25,6 @@ def build_net(inputs: Inputs):
                 inputs_states.append(tf.concat(axis=1, values=[states_fw[0], states_bw[-1]]))
                 inputs_states.append(tf.concat(axis=1, values=[states_fw[-1], states_bw[0]]))
         with vs.variable_scope("output"):
-            # output = tf.transpose(output, [1, 0, 2])
             states_fw, states_bw = build_encoder(output, OUTPUT_STATE_SIZE)
             output_states = [tf.concat(axis=1, values=[states_fw[i], states_bw[-(i + 1)]]) for i in range(OUTPUT_SIZE)]
         inputs_states = tf.transpose(tf.stack(inputs_states), [1, 0, 2])
@@ -67,7 +66,7 @@ def build_placeholders():
 def build_fetches(inputs: Inputs, outputs: Outputs):
     with vs.variable_scope("loss"):
         trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "q-function")
-        loss = tf.abs(inputs.evaluation - outputs.q)
+        loss = tf.reduce_mean(tf.abs(inputs.evaluation - outputs.q))
     with vs.variable_scope("optimiser"):
         optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
     return Fetches(optimise, loss)
@@ -76,15 +75,15 @@ def build_fetches(inputs: Inputs, outputs: Outputs):
 @trace
 def build_feed_dicts(batches: list, evaluate: callable, inputs: Inputs):
     analyser_inputs = analyser.Inputs(*(inputs[:3]))
-    output = analyser.build_net(analyser_inputs)
+    outputs = analyser.build_net(analyser_inputs)
     feed_dicts = analyser.build_feed_dicts(batches, analyser_inputs)
     with tf.Session() as session, tf.device('/cpu:0'):
         # fixme:
         session.run(tf.global_variables_initializer())
-        # saver = tf.train.Saver()
+        # saver = analyser.build_saver()
         # saver.restore(session, ANALYSER_MODEL)
         for feed_dict in feed_dicts:
-            local_output = session.run(fetches=output.output, feed_dict=feed_dict)
+            local_output = session.run(fetches=outputs.output, feed_dict=feed_dict)
             feed_dict.update({outp: local_output[i] for i, outp in enumerate(inputs.output)})
             feed_dict[inputs.evaluation] = evaluate(inputs.inputs, local_output)
     return feed_dicts
@@ -100,36 +99,41 @@ def build(evaluate: callable):
     return (fetches, inputs, outputs), feed_dicts
 
 
-@sigint
+@trace
+def build_saver():
+    trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "q-function")
+    saver = tf.train.Saver(var_list=trainable_variables)
+    return saver
+
+
 @trace
 def train(restore: bool = False):
     (fetches, _, _), feed_dicts = build(lambda inputs, output: [1.0] * BATCH_SIZE)
-    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        saver = tf.train.Saver()
+    with tf.Session() as session, tf.device('/cpu:0'):
+        saver = None
         try:
+            session.run(tf.global_variables_initializer())
+            saver = build_saver()
             if restore:
                 saver.restore(session, Q_FUNCTION_MODEL)
-            else:
-                session.run(tf.global_variables_initializer())
             for epoch in range(Q_FUNCTION_EPOCHS):
-                losses = [0.0] * (len(fetches) - 1)
+                losses = (0.0 for _ in range(len(fetches) - 1))
                 for feed_dict in feed_dicts:
                     _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
-                    for i, loss in enumerate(local_losses):
-                        losses[i] += loss
-                losses = [losses[i] / len(feed_dicts) for i, loss in enumerate(losses)]
-                string = " ".join(("%7.3f" % loss for loss in losses))
-                logging.info("Epoch: {:4d}/{:-4d} Losses: [{}]".format(epoch, Q_FUNCTION_EPOCHS, string))
-                figure.plot(epoch, losses[0])
+                    losses = (local_losses[i] + loss for i, loss in enumerate(losses))
+                losses = (loss / len(feed_dicts) for loss in losses)
+                loss = next(losses)
+                logging.info("Epoch: {:4d}/{:-4d} Loss: {:.4f}".format(epoch, Q_FUNCTION_EPOCHS, loss))
                 if epoch % 50:
                     saver.save(session, Q_FUNCTION_MODEL)
         except SIGINTException:
             logging.error("SIGINT")
         finally:
+            if saver is None:
+                saver = build_saver()
             saver.save(session, Q_FUNCTION_MODEL)
 
 
-@sigint
 @trace
 def test():
     (fetches, _, _), feed_dicts = build(lambda inputs, output: [1.0] * BATCH_SIZE)
