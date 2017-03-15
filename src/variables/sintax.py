@@ -20,7 +20,7 @@ STABLE_REDUCTION = "@sr"
 HEAD = "@head"
 PARAMS = "@param"
 RETURN = "@return"
-VARIABLES = "@variables"
+VARIABLES = "@variable"
 SEE = "@see"
 THROW = "@throw"
 

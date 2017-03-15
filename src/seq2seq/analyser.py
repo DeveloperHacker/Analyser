@@ -1,23 +1,23 @@
-import logging
+from collections import namedtuple
 
-import tensorflow as tf
-from tensorflow.python.ops import variable_scope as vs
-
-from seq2seq.Q_function import build_q_function
-from seq2seq.seq2seq import build_encoder, build_decoder
-from utils import dumper, batcher
+from seq2seq import q_function
+from seq2seq.seq2seq import *
+from utils import batcher, dumper
 from utils.Figure import Figure
-from utils.batcher import build_butches
-from utils.wrapper import trace, sigint, SIGINTException
+from utils.wrapper import *
 from variables.embeddings import *
-from variables.embeddings import EMBEDDINGS
 from variables.path import *
-from variables.sintax import PARTS
+from variables.sintax import *
 from variables.train import *
+
+Inputs = namedtuple("Inputs", ["inputs", "inputs_sizes", "initial_decoder_state"])
+Outputs = namedtuple("Outputs", ["output"])
+Fetches = namedtuple("Fetches", ["optimise", "loss", "l2_loss", "q"])
 
 
 @trace
-def build_analyser(inputs, inputs_sizes, initial_decoder_state):
+def build_net(inputs: Inputs):
+    inputs, inputs_sizes, initial_decoder_state = inputs
     with vs.variable_scope("analyser"):
         inputs_states = []
         for label in PARTS:
@@ -37,13 +37,13 @@ def build_analyser(inputs, inputs_sizes, initial_decoder_state):
             W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="weights")
             B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="biases")
             output = tf.reshape(tf.stack(output), [BATCH_SIZE * OUTPUT_SIZE, EMBEDDING_SIZE])
-            output = tf.nn.softmax(tf.reshape(tf.matmul(output, W) + B, [BATCH_SIZE, OUTPUT_SIZE, NUM_TOKENS]))
-    return output
+            output = tf.nn.softmax(tf.reshape(tf.matmul(output, W) + B, [OUTPUT_SIZE, BATCH_SIZE, NUM_TOKENS]))
+    return Outputs(output)
 
 
 @trace
-def build_feed_dicts(batches, inputs, inputs_sizes, initial_decoder_state):
-    # noinspection PyShadowingNames
+def build_feed_dicts(batches: list, inputs: Inputs):
+    inputs, inputs_sizes, initial_decoder_state = inputs
     feed_dicts = []
     for batch in batches:
         feed_dict = {}
@@ -57,14 +57,91 @@ def build_feed_dicts(batches, inputs, inputs_sizes, initial_decoder_state):
             feed_dict[inputs_sizes[label]] = tuple(len(emb) for emb in lines)
         feed_dict[initial_decoder_state] = INITIAL_STATE
         feed_dicts.append(feed_dict)
-        return feed_dicts
+    return feed_dicts
+
+
+@trace
+def build_placeholders():
+    inputs = {}
+    inputs_sizes = {}
+    for label in PARTS:
+        with vs.variable_scope(label):
+            inputs[label] = []
+            for i in range(INPUT_SIZE):
+                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
+                inputs[label].append(placeholder)
+                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
+    initial_decoder_state = tf.placeholder(tf.float32, [BATCH_SIZE, INPUT_STATE_SIZE], "initial_decoder_state")
+    return Inputs(inputs, inputs_sizes, initial_decoder_state)
+
+
+@trace
+def build_fetches(outputs: q_function.Outputs):
+    q = outputs.q
+    with vs.variable_scope("loss"):
+        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "analyser")
+        l2_loss = build_l2_loss(trainable_variables, ANALYSER_REGULARIZATION_VARIABLES)
+        loss = tf.sqrt(tf.square(Q_WEIGHT * q) + tf.square(L2_WEIGHT * l2_loss))
+    with vs.variable_scope("optimiser"):
+        optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
+    return Fetches(optimise, loss, l2_loss, q)
+
+
+@trace
+def build_batches():
+    methods = dumper.load(VEC_METHODS)
+    baskets = batcher.throwing(methods, [INPUT_SIZE])
+    batches = {basket: batcher.build_batches(data[:BATCH_SIZE * 2], BATCH_SIZE) for basket, data in baskets.items()}
+    return batches[INPUT_SIZE]
+
+
+@trace
+def build():
+    inputs = build_placeholders()
+    outputs = build_net(inputs)
+    q_function_inputs = q_function.Inputs(*inputs, outputs.output, None)
+    q_function_outputs = q_function.build_net(q_function_inputs)
+    fetches = build_fetches(q_function_outputs)
+    batches = build_batches()
+    feed_dicts = build_feed_dicts(batches, inputs)
+    return (fetches, inputs, outputs), feed_dicts
+
+
+@sigint
+@trace
+def train(restore: bool = False):
+    (fetches, _, _), feed_dicts = build()
+    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
+        saver = tf.train.Saver()
+        try:
+            if restore:
+                saver.restore(session, ANALYSER_MODEL)
+            else:
+                session.run(tf.global_variables_initializer())
+            saver.restore(session, Q_FUNCTION_MODEL)
+            for epoch in range(ANALYSER_EPOCHS):
+                losses = [0.0] * (len(fetches) - 1)
+                for feed_dict in feed_dicts:
+                    _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
+                    for i, loss in enumerate(local_losses):
+                        losses[i] += loss
+                for i, loss in enumerate(losses):
+                    losses[i] /= len(feed_dicts)
+                string = " ".join(("%7.3f" % loss for loss in losses))
+                logging.info("Epoch: {:4d}/{:-4d} Losses: [{}]".format(epoch, ANALYSER_EPOCHS, string))
+                figure.plot(epoch, losses[0])
+                if epoch % 50:
+                    saver.save(session, ANALYSER_MODEL)
+        except SIGINTException:
+            logging.error("SIGINT")
+        finally:
+            saver.save(session, ANALYSER_MODEL)
 
 
 @trace
 def test():
     embeddings = list(EMBEDDINGS)
-    # noinspection PyShadowingNames
-    ((_, loss, *_), (batch, _, _), output), feed_dicts = build()
+    ((_, loss, _, _), (batch, _, _), output), feed_dicts = build()
     first = [batch[label][0] for label in PARTS]
     with tf.Session() as session:
         saver = tf.train.Saver()
@@ -89,91 +166,3 @@ def test():
         logging.info("RoundLoss: {}".format(np.mean(roundLoss)))
         logging.info("Loss: {}".format(np.mean(loss)))
         logging.info("ResLoss: {}".format(np.mean(res_loss)))
-
-
-@trace
-def build_placeholders():
-    inputs = {}
-    inputs_sizes = {}
-    for label in PARTS:
-        with vs.variable_scope(label):
-            inputs[label] = []
-            for i in range(INPUT_SIZE):
-                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
-                inputs[label].append(placeholder)
-                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
-    initial_decoder_state = tf.placeholder(tf.float32, [BATCH_SIZE, INPUT_STATE_SIZE], "initial_decoder_state")
-    return inputs, inputs_sizes, initial_decoder_state
-
-
-@trace
-def build_l2_loss(trainable_variables, regularisation_variable_names):
-    with vs.variable_scope("l2_loss"):
-        variables = [variable for variable in trainable_variables if variable.name in regularisation_variable_names]
-        assert len(variables) == len(regularisation_variable_names)
-        l2_loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-    return l2_loss
-
-
-@trace
-def build_fetches(result):
-    with vs.variable_scope("loss"):
-        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "analyser")
-        l2_loss = build_l2_loss(trainable_variables, ANALYSER_REGULARIZATION_VARIABLES)
-        loss = tf.sqrt(tf.square(Q_WEIGHT * result) + tf.square(L2_WEIGHT * l2_loss))
-    with vs.variable_scope("optimiser"):
-        optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-    return optimise, (loss, l2_loss, result)
-
-
-@trace
-def build():
-    inputs, inputs_sizes, initial_decoder_state = build_placeholders()
-    output = build_analyser(inputs, inputs_sizes, initial_decoder_state)
-    result = build_q_function(inputs, inputs_sizes, initial_decoder_state, output)
-    fetches = build_fetches(result)
-
-    with tf.Session() as session:
-        summary_writer = tf.summary.FileWriter(ANALYSER, session.graph)
-        session.run(tf.global_variables_initializer())
-        summary_writer.close()
-
-    exit(1)
-
-    methods = dumper.load(VEC_METHODS)
-    baskets = batcher.throwing(methods, [INPUT_SIZE])
-    batches = {basket: build_butches(data, BATCH_SIZE) for basket, data in baskets.items()}
-    feed_dicts = build_feed_dicts(batches[INPUT_SIZE], *inputs)
-    return (fetches, inputs, output), feed_dicts
-
-
-@sigint
-@trace
-def train(restore: bool = False):
-    # noinspection PyShadowingNames
-    (fetches, _, _), feed_dicts = build()
-    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        saver = tf.train.Saver()
-        try:
-            if restore:
-                saver.restore(session, ANALYSER_MODEL)
-            else:
-                session.run(tf.global_variables_initializer())
-            saver.restore(session, Q_FUNCTION_MODEL)
-            for epoch in range(SEQ2SEQ_EPOCHS):
-                losses = [0.0] * (len(fetches) - 1)
-                for feed_dict in feed_dicts:
-                    _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
-                    for i, loss in enumerate(local_losses):
-                        losses[i] += loss
-                for i, loss in enumerate(losses):
-                    losses[i] /= len(feed_dicts)
-                string = " ".join(("%7.3f" % loss for loss in losses))
-                logging.info("Epoch: {:4d}/{:-4d} Losses: [{}]".format(epoch, SEQ2SEQ_EPOCHS, string))
-                figure.plot(epoch, losses[0])
-                if epoch % 50:
-                    saver.save(session, ANALYSER_MODEL)
-        except SIGINTException:
-            logging.error("SIGINT")
-        finally:
-            saver.save(session, ANALYSER_MODEL)

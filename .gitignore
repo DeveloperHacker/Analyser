@@ -2,7 +2,6 @@
 ### Python template
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
 *$py.class
 
 # Distribution / packaging
@@ -90,5 +89,5 @@ ENV/
 *.sh
 *.cfg
 .idea/
-resources/
-*.cc
+!/src/seq2seq/q_function.py
+resources

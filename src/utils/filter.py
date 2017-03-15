@@ -159,11 +159,11 @@ def applyFiltersForString(string: str, params: list) -> str:
 def join(javaDoc: JavaDoc) -> list:
     joined = [
         ("head", javaDoc.head),
-        ("params", (" %s " % NEXT).join(javaDoc.params)),
-        ("variables", (" %s " % NEXT).join(javaDoc.variables)),
-        ("results", (" %s " % NEXT).join(javaDoc.results)),
-        # ("sees", (" %s " % next).join(javaDoc.sees)),
-        # ("throws", (" %s " % next).join(javaDoc.throws))
+        ("param", (" %s " % NEXT).join(javaDoc.params)),
+        ("variable", (" %s " % NEXT).join(javaDoc.variables)),
+        ("return", (" %s " % NEXT).join(javaDoc.results)),
+        # ("see", (" %s " % next).join(javaDoc.sees)),
+        # ("throw", (" %s " % next).join(javaDoc.throws))
     ]
     return joined
 

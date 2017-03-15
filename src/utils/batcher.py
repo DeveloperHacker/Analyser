@@ -2,10 +2,11 @@ import numpy as np
 
 from utils import generator
 from utils.wrapper import trace
+from variables.sintax import PARTS
 
 
 def reshape(batch: list):
-    new_batch = {"head": ([], []), "params": ([], []), "variables": ([], []), "results": ([], [])}
+    new_batch = {label: ([], []) for label in PARTS}
     for joined in batch:
         for label, (embs, text) in joined:
             new_batch[label][0].append(embs)
@@ -64,7 +65,7 @@ def throwing(docs: list, basket_sizes: list):
 
 
 @trace
-def build_butches(docs: list, cluster_size: int):
+def build_batches(docs: list, cluster_size: int):
     num_data = len(docs)
     num_clusters = num_data // cluster_size
     vectors = [(i, vector(doc)) for i, doc in enumerate(docs)]

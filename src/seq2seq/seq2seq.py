@@ -50,3 +50,12 @@ def build_decoder(
         )
         outputs = [tf.matmul(decoder_output, W) + B for decoder_output in decoder_outputs]
     return outputs, state
+
+
+@trace
+def build_l2_loss(trainable_variables, regularisation_variable_names):
+    with vs.variable_scope("l2_loss"):
+        variables = [variable for variable in trainable_variables if variable.name in regularisation_variable_names]
+        assert len(variables) == len(regularisation_variable_names)
+        l2_loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
+    return l2_loss
