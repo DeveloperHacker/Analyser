@@ -3,7 +3,7 @@ from multiprocessing import Pool
 
 from utils.method import JavaDoc, Method
 from utils.wrapper import trace
-from variables.sintax import *
+from variables.tags import *
 
 
 class Filter:

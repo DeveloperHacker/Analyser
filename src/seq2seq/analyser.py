@@ -8,7 +8,7 @@ from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
-from variables.sintax import *
+from variables.tags import *
 from variables.train import *
 
 Inputs = namedtuple("Inputs", ["inputs", "inputs_sizes", "initial_decoder_state"])
@@ -117,12 +117,13 @@ def build_saver() -> tf.train.Saver:
 
 
 @trace
+def pretrain():
+    pass
+
+
+@trace
 def train(restore: bool = False):
     (fetches, _, _), feed_dicts = build()
-    with tf.Session() as session:
-        writer = tf.summary.FileWriter(ANALYSER_MODEL, session.graph)
-        writer.close()
-    exit(1)
     with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
         saver = None
         try:

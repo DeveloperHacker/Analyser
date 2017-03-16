@@ -2,7 +2,7 @@ import numpy as np
 
 from utils import generator
 from utils.wrapper import trace
-from variables.sintax import PARTS
+from variables.tags import PARTS
 
 
 def reshape(batch: list):

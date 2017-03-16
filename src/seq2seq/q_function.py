@@ -6,7 +6,7 @@ from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
-from variables.sintax import *
+from variables.tags import *
 from variables.train import *
 
 Inputs = namedtuple("Inputs", ["inputs", "inputs_sizes", "initial_decoder_state", "output", "evaluation"])
@@ -78,10 +78,9 @@ def build_feed_dicts(batches: list, evaluate: callable, inputs: Inputs):
     outputs = analyser.build_net(analyser_inputs)
     feed_dicts = analyser.build_feed_dicts(batches, analyser_inputs)
     with tf.Session() as session, tf.device('/cpu:0'):
-        # fixme:
         session.run(tf.global_variables_initializer())
-        # saver = analyser.build_saver()
-        # saver.restore(session, ANALYSER_MODEL)
+        saver = analyser.build_saver()
+        saver.restore(session, ANALYSER_MODEL)
         for feed_dict in feed_dicts:
             local_output = session.run(fetches=outputs.output, feed_dict=feed_dict)
             feed_dict.update({outp: local_output[i] for i, outp in enumerate(inputs.output)})
@@ -107,8 +106,13 @@ def build_saver():
 
 
 @trace
+def evaluation(inputs: Inputs, outputs: Outputs):
+    return [1.0] * BATCH_SIZE
+
+
+@trace
 def train(restore: bool = False):
-    (fetches, _, _), feed_dicts = build(lambda inputs, output: [1.0] * BATCH_SIZE)
+    (fetches, _, _), feed_dicts = build(evaluation)
     with tf.Session() as session, tf.device('/cpu:0'):
         saver = None
         try:
@@ -136,5 +140,5 @@ def train(restore: bool = False):
 
 @trace
 def test():
-    (fetches, _, _), feed_dicts = build(lambda inputs, output: [1.0] * BATCH_SIZE)
+    (fetches, _, _), feed_dicts = build(evaluation)
     pass

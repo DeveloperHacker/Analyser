@@ -2,7 +2,7 @@ import numpy as np
 
 from utils import dumper as _dumper
 from variables import path as _path
-from variables.sintax import *
+from variables.tags import *
 from variables.train import *
 
 EMBEDDINGS = _dumper.load(_path.EMBEDDINGS)
