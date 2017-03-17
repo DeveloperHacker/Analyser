@@ -44,3 +44,11 @@ def cluster():
     embeddings = dumper.load(EMBEDDINGS)
     clusters = generator.KNeighbors(embeddings, 0.1)
     printer.XNeighbors(clusters)
+
+
+@trace
+def run(foo: str):
+    if foo == "train":
+        train()
+    elif foo == "cluster":
+        cluster()

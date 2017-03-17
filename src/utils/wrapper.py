@@ -7,7 +7,7 @@ nested = 0
 def trace(f):
     def wrapper(*args, **kwargs):
         global nested
-        name = f.__module__ + "." + f.__name__
+        name = f.__module__.split(".")[-1] + "." + f.__name__
         shift = "│" * nested
         logging.info("{}╒Function \"{}\" is invoked".format(shift, name))
         clock = time.time()

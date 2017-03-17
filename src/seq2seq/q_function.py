@@ -1,22 +1,34 @@
-from collections import namedtuple
-
 from seq2seq import analyser
+from seq2seq import contract
+from seq2seq.Net import *
 from seq2seq.seq2seq import *
+from utils.Figure import Figure
 from utils.handlers import SIGINTException
 from utils.wrapper import *
-from variables.embeddings import *
-from variables.path import *
 from variables.tags import *
 from variables.train import *
 
-Inputs = namedtuple("Inputs", ["inputs", "inputs_sizes", "initial_decoder_state", "output", "evaluation"])
-Outputs = namedtuple("Outputs", ["q"])
-Fetches = namedtuple("Fetches", ["optimise", "loss"])
+
+@trace
+def build_placeholders() -> Inputs:
+    inputs = {}
+    inputs_sizes = {}
+    for label in PARTS:
+        with vs.variable_scope(label):
+            inputs[label] = []
+            for i in range(INPUT_SIZE):
+                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
+                inputs[label].append(placeholder)
+                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
+    initial_decoder_state = tf.placeholder(tf.float32, [BATCH_SIZE, INPUT_STATE_SIZE], "initial_decoder_state")
+    evaluation = tf.placeholder(tf.float32, [BATCH_SIZE], "evaluation")
+    return Inputs(inputs, inputs_sizes, initial_decoder_state, None, evaluation)
 
 
 @trace
-def build_net(inputs: Inputs):
-    inputs, inputs_sizes, initial_decoder_state, output, _ = inputs
+def build_net(inputs: Inputs) -> QFunctionNet:
+    net = QFunctionNet(inputs=inputs)
+    inputs, inputs_sizes, initial_decoder_state, output, _ = net.inputs.flatten()
     with vs.variable_scope("q-function"):
         inputs_states = []
         for label in PARTS:
@@ -29,8 +41,9 @@ def build_net(inputs: Inputs):
             output_states = [tf.concat(axis=1, values=[states_fw[i], states_bw[-(i + 1)]]) for i in range(OUTPUT_SIZE)]
         inputs_states = tf.transpose(tf.stack(inputs_states), [1, 0, 2])
         Q, _ = build_decoder(output_states, inputs_states, INPUT_STATE_SIZE, initial_decoder_state, 1)
+        Q = tf.nn.relu(Q)
         Q = tf.transpose(tf.reshape(tf.stack(Q), [OUTPUT_SIZE, BATCH_SIZE]), [1, 0])
-        with tf.variable_scope("softmax"):
+        with vs.variable_scope("softmax"):
             W_shape = [OUTPUT_STATE_SIZE * 2, 1]
             B_shape = [1]
             W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="weights")
@@ -39,106 +52,88 @@ def build_net(inputs: Inputs):
             output_states = tf.reshape(tf.stack(output_states), [BATCH_SIZE * OUTPUT_SIZE, OUTPUT_STATE_SIZE * 2])
             I = tf.nn.softmax(tf.reshape(tf.matmul(output_states, W) + B, [BATCH_SIZE, OUTPUT_SIZE]))
             q = tf.reduce_sum(Q * I, axis=1)
-    return Outputs(q)
+        scope = vs.get_variable_scope().name
+    net.outputs = QFunctionOutputs(output, scope, q)
+    return net
 
 
 @trace
-def build_placeholders():
-    inputs = {}
-    inputs_sizes = {}
-    for label in PARTS:
-        with vs.variable_scope(label):
-            inputs[label] = []
-            for i in range(INPUT_SIZE):
-                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
-                inputs[label].append(placeholder)
-                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
-    with vs.variable_scope("output"):
-        output = []
-        for i in range(OUTPUT_SIZE):
-            placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, NUM_TOKENS], "output_%d" % i)
-            output.append(placeholder)
-    initial_decoder_state = tf.placeholder(tf.float32, [BATCH_SIZE, INPUT_STATE_SIZE], "initial_decoder_state")
-    evaluation = tf.placeholder(tf.float32, [BATCH_SIZE], "evaluation")
-    return Inputs(inputs, inputs_sizes, initial_decoder_state, output, evaluation)
-
-
-def build_fetches(inputs: Inputs, outputs: Outputs):
+def build_fetches(net: QFunctionNet) -> Fetches:
+    scope = vs.get_variable_scope().name
+    scope = ("" if len(scope) == 0 else scope + "/") + "q-function"
     with vs.variable_scope("loss"):
-        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "q-function")
-        loss = tf.reduce_mean(tf.abs(inputs.evaluation - outputs.q))
+        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
+        loss = tf.reduce_mean(tf.square(net.inputs.evaluation - net.outputs.q))
+        print(loss.shape)
     with vs.variable_scope("optimiser"):
         optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-    return Fetches(optimise, loss)
+    return Fetches(optimise, Losses(loss))
 
 
 @trace
-def build_feed_dicts(batches: list, evaluate: callable, inputs: Inputs):
-    analyser_inputs = analyser.Inputs(*(inputs[:3]))
-    outputs = analyser.build_net(analyser_inputs)
-    feed_dicts = analyser.build_feed_dicts(batches, analyser_inputs)
+def build_feed_dicts(feed_dicts: list, net: AnalyserNet, evaluate: callable) -> list:
     with tf.Session() as session, tf.device('/cpu:0'):
         session.run(tf.global_variables_initializer())
-        saver = analyser.build_saver()
-        saver.restore(session, ANALYSER_MODEL)
+        net.restore(session)
         for feed_dict in feed_dicts:
-            local_output = session.run(fetches=outputs.output, feed_dict=feed_dict)
-            feed_dict.update({outp: local_output[i] for i, outp in enumerate(inputs.output)})
-            feed_dict[inputs.evaluation] = evaluate(inputs.inputs, local_output)
+            _inputs, _output = session.run(fetches=(net.inputs.inputs, net.inputs.output), feed_dict=feed_dict)
+            feed_dict.update({output: _output[i] for i, output in enumerate(net.inputs.output)})
+            feed_dict[net.inputs.evaluation] = evaluate(_inputs, _output)
     return feed_dicts
 
 
 @trace
-def build(evaluate: callable):
+def build() -> Net:
     inputs = build_placeholders()
-    outputs = build_net(inputs)
-    fetches = build_fetches(inputs, outputs)
+    analyser_net = analyser.build_net(inputs)
+    analyser_net.inputs.output = analyser_net.outputs.output
+    q_function_net = build_net(analyser_net.inputs)
+    q_function_net.fetches = build_fetches(q_function_net)
     batches = analyser.build_batches()
-    feed_dicts = build_feed_dicts(batches, evaluate, inputs)
-    return (fetches, inputs, outputs), feed_dicts
+    analyser_net.feed_dicts = analyser.build_feed_dicts(analyser_net, batches)
+    evaluate = contract.build_evaluator()
+    q_function_net.feed_dicts = build_feed_dicts(analyser_net.feed_dicts, analyser_net, evaluate)
+    return q_function_net
 
 
 @trace
-def build_saver():
-    trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "q-function")
-    saver = tf.train.Saver(var_list=trainable_variables)
-    return saver
-
-
-@trace
-def evaluation(inputs: Inputs, outputs: Outputs):
-    return [1.0] * BATCH_SIZE
-
-
-@trace
-def train(restore: bool = False):
-    (fetches, _, _), feed_dicts = build(evaluation)
-    with tf.Session() as session, tf.device('/cpu:0'):
-        saver = None
+def train(net: Net, restore: bool = False):
+    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
+        writer = tf.summary.FileWriter(SEQ2SEQ, session.graph)
+        writer.close()
+        exit(1)
         try:
             session.run(tf.global_variables_initializer())
-            saver = build_saver()
             if restore:
-                saver.restore(session, Q_FUNCTION_MODEL)
+                net.restore(session)
             for epoch in range(Q_FUNCTION_EPOCHS):
-                losses = (0.0 for _ in range(len(fetches) - 1))
-                for feed_dict in feed_dicts:
-                    _, *local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
+                losses = (0.0 for _ in range(len(net.fetches.flatten()) - 1))
+                for feed_dict in net.feed_dicts:
+                    _, *local_losses = session.run(fetches=net.fetches.flatten(), feed_dict=feed_dict)
                     losses = (local_losses[i] + loss for i, loss in enumerate(losses))
-                losses = (loss / len(feed_dicts) for loss in losses)
+                losses = (loss / len(net.feed_dicts) for loss in losses)
                 loss = next(losses)
                 logging.info("Epoch: {:4d}/{:-4d} Loss: {:.4f}".format(epoch, Q_FUNCTION_EPOCHS, loss))
+                figure.plot(epoch, loss)
                 if epoch % 50:
-                    saver.save(session, Q_FUNCTION_MODEL)
+                    net.save(session)
         except SIGINTException:
             logging.error("SIGINT")
         finally:
-            if saver is None:
-                saver = build_saver()
-            saver.save(session, Q_FUNCTION_MODEL)
+            net.save(session)
 
 
 @trace
-def test():
-    (fetches, _, _), feed_dicts = build(evaluation)
+def test(net: Net):
     pass
+
+
+@trace
+def run(foo: str):
+    net = build()
+    if foo == "train":
+        train(net)
+    elif foo == "restore":
+        train(net, True)
+    elif foo == "test":
+        test(net)

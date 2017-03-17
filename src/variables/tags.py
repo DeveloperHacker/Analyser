@@ -26,15 +26,6 @@ THROW = "@throw"
 
 NEXT = "@next"
 
-EQUAL = "@equal"
-NOT_EQUAL = "@not_equal"
-IS = "@is"
-IS_NOT = "@is_not"
-
-DELIMITER = "@delimiter"
-END = "@end"
-NOP = "@nop"
-
 NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
 PARTS = (
