@@ -5,6 +5,7 @@ from tensorflow.python.ops import variable_scope as vs
 
 from seq2seq.rnn import static_bidirectional_rnn
 from utils.wrapper import trace
+from variables.train import INITIALIZATION_STD
 
 
 @trace
@@ -37,8 +38,10 @@ def build_decoder(
         gru = GRUCell(state_size)
         W_shape = [state_size, output_size]
         B_shape = [output_size]
-        W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="weights")
-        B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="biases")
+        W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=INITIALIZATION_STD, dtype=tf.float32),
+                        name="weights")
+        B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=INITIALIZATION_STD, dtype=tf.float32),
+                        name="biases")
         decoder_outputs, state = attention_decoder(
             cell=gru,
             dtype=tf.float32,

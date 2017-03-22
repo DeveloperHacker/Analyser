@@ -52,26 +52,33 @@ def chunks(line, n):
         yield line[i:i + n]
 
 
-@trace
-def throwing(docs: list, basket_sizes: list):
+def hist(data: list, basket_sizes: list, key=None):
+    if not key:
+        key = lambda x: x
     basket_sizes = list(sorted(basket_sizes))
     baskets = {basket: [] for basket in basket_sizes}
-    for doc in docs:
+    for datum in data:
         for i, right in enumerate(basket_sizes):
             left = basket_sizes[i - 1] if i > 0 else 0
-            if left < max([len(embs) for label, (embs, text) in doc]) < right:
-                baskets[right].append(doc)
+            if left < key(datum) < right:
+                baskets[right].append(datum)
     return baskets
 
 
 @trace
-def build_batches(docs: list, cluster_size: int):
-    num_data = len(docs)
+def throwing(data: list, basket_sizes: list):
+    key = lambda datum: max([len(embeddings) for label, (embeddings, text) in datum])
+    return hist(data, basket_sizes, key=key)
+
+
+@trace
+def build_batches(data: list, cluster_size: int, key=lambda x: x):
+    num_data = len(data)
     num_clusters = num_data // cluster_size
-    vectors = [(i, vector(doc)) for i, doc in enumerate(docs)]
+    vectors = [(i, vector(key(datum))) for i, datum in enumerate(data)]
     clusters = generator.KMeans(vectors, num_clusters)
     idx_batches = [chunk for cluster in clusters for chunk in chunks(cluster, cluster_size) if
                    len(chunk) == cluster_size]
-    batches = [[docs[i] for i in idx_batch] for idx_batch in idx_batches]
+    batches = [[data[i] for i in idx_batch] for idx_batch in idx_batches]
     batches = [reshape(batch) for batch in batches]
     return batches

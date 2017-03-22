@@ -38,3 +38,24 @@ class Figure:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
+
+    def line(self, mode=".b") -> 'Figure.Line':
+        return Figure.Line(self, mode)
+
+    class Line:
+        def __init__(self, parent: 'Figure', mode):
+            self.axes = []
+            self.ayes = []
+            self.parent = parent
+            self.mode = mode
+
+        def append(self, x, y):
+            self.axes.append(x)
+            self.ayes.append(y)
+
+        def plot(self, x, y):
+            self.append(x, y)
+            if len(self.axes) > 1:
+                self.parent.plot(self.axes[-2:-1], self.ayes[-2:-1], self.mode)
+            else:
+                self.parent.plot(x, y, self.mode)

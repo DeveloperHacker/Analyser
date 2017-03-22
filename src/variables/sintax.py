@@ -1,5 +1,3 @@
-from enum import Enum
-
 import numpy as np
 
 NUM_TOKENS = 0
@@ -22,37 +20,49 @@ class Token:
         return self._embedding
 
 
+Constants = []
+Functions = []
+Delimiters = []
+Instances = []
+
+
 class Constant(Token):
     def __init__(self, name: str):
         super().__init__(name)
+        Constants.append(self)
+        Instances.append(self)
 
 
-class Operator(Token):
-    def __init__(self, name: str, args: int):
+class Function(Token):
+    def __init__(self, name: str, arguments: int):
         super().__init__(name)
-        self.args = args
+        self.arguments = arguments
+        Functions.append(self)
+        Instances.append(self)
 
 
 class Delimiter(Token):
     def __init__(self, name: str):
         super().__init__(name)
+        Delimiters.append(self)
+        Instances.append(self)
 
 
-class Tokens(Enum):
+class Tokens:
     STRING = Constant("string")
     VARIABLE = Constant("variable")
     NUMBER = Constant("number")
     TRUE = Constant("true")
     FALSE = Constant("false")
     NULL = Constant("null")
-    EQUAL = Operator("equal", 2)
-    NOT_EQUAL = Operator("not equal", 2)
-    IS = Operator("is", 2)
-    NOT_IS = Operator("not is", 2)
+    EQUAL = Function("equal", 2)
+    NOT_EQUAL = Function("not equal", 2)
+    IS = Function("is", 2)
+    NOT_IS = Function("not is", 2)
     # PUNCTUATION = Delimiter("punctuation")
     END = Delimiter("end")
     NOP = Delimiter("nop")
 
     @staticmethod
     def get(uid):
-        return list(Tokens)[uid].value
+        return Instances[uid]

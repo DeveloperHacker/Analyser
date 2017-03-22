@@ -36,7 +36,6 @@ def separate(tar_label, tar_value, data, divider, threshold) -> StateParam:
 
 def KNeighborsClusterisator(data: dict):
     def instance(threshold: float):
-        # data = {k: v for k, v in list(data.items())[:10]}
         print("[XNeighbors]")
         pool = Pool()
         state = [(label, target, data) for label, target in data.items()]

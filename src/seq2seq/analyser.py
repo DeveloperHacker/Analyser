@@ -1,3 +1,4 @@
+from seq2seq import contract
 from seq2seq import q_function
 from seq2seq.Net import *
 from seq2seq.seq2seq import *
@@ -13,23 +14,21 @@ from variables.train import *
 
 
 @trace
-def build_placeholders() -> Inputs:
-    inputs = Inputs()
+def build_inputs():
+    inputs = {}
+    inputs_sizes = {}
     for label in PARTS:
         with vs.variable_scope(label):
-            inputs.inputs[label] = []
+            inputs[label] = []
             for i in range(INPUT_SIZE):
                 placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
-                inputs.inputs[label].append(placeholder)
-                inputs.inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
-    inputs.initial_decoder_state = tf.placeholder(tf.float32, [BATCH_SIZE, INPUT_STATE_SIZE], "initial_decoder_state")
-    return inputs
+                inputs[label].append(placeholder)
+                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
+    return inputs, inputs_sizes
 
 
 @trace
-def build_net(inputs: Inputs) -> AnalyserNet:
-    analyser_net = AnalyserNet(inputs=inputs)
-    inputs, inputs_sizes, initial_decoder_state, *_ = analyser_net.inputs.flatten()
+def build_outputs(inputs, inputs_sizes):
     with vs.variable_scope("analyser"):
         inputs_states = []
         for label in PARTS:
@@ -41,41 +40,43 @@ def build_net(inputs: Inputs) -> AnalyserNet:
         decoder_inputs = [goes for _ in range(OUTPUT_SIZE)]
         inputs_states = tf.stack(inputs_states)
         inputs_states = tf.transpose(inputs_states, [1, 0, 2])
-        output, _ = build_decoder(decoder_inputs, inputs_states, INPUT_STATE_SIZE, initial_decoder_state,
-                                  EMBEDDING_SIZE, loop=True)
+        output, _ = build_decoder(decoder_inputs, inputs_states, INPUT_STATE_SIZE, INITIAL_STATE, EMBEDDING_SIZE,
+                                  loop=True)
         with vs.variable_scope("softmax"):
             W_shape = [EMBEDDING_SIZE, NUM_TOKENS]
             B_shape = [NUM_TOKENS]
-            W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=0.01, dtype=tf.float32), name="weights")
-            B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=0.01, dtype=tf.float32), name="biases")
+            std = INITIALIZATION_STD
+            W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=std, dtype=tf.float32), name="weights")
+            B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=std, dtype=tf.float32), name="biases")
             output = tf.reshape(tf.stack(output), [BATCH_SIZE * OUTPUT_SIZE, EMBEDDING_SIZE])
-            output = tf.nn.softmax(tf.reshape(tf.matmul(output, W) + B, [OUTPUT_SIZE, BATCH_SIZE, NUM_TOKENS]))
+            logits = tf.reshape(tf.matmul(output, W) + B, [OUTPUT_SIZE, BATCH_SIZE, NUM_TOKENS])
+            output = tf.nn.softmax(logits)
             output = tf.unstack(output)
         scope = vs.get_variable_scope().name
-    analyser_net.outputs = AnalyserOutputs(output, scope)
-    return analyser_net
+    return output, logits, scope
 
 
 @trace
-def build_fetches(q_function_net: QFunctionNet) -> Fetches:
-    scope = vs.get_variable_scope().name
-    scope = ("" if len(scope) == 0 else scope + "/") + "analyser"
+def build_fetches(analyser_scope, q):
     with vs.variable_scope("loss"):
-        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
-        regularization_variables = [scope + "/" + variable for variable in REGULARIZATION_VARIABLES]
-        l2_loss = build_l2_loss(trainable_variables, regularization_variables)
-        q = tf.reduce_mean(q_function_net.outputs.q)
-        loss = Q_WEIGHT * q + L2_WEIGHT * l2_loss
+        trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, analyser_scope)
+        # regularization_variables = [analyser_scope + "/" + variable for variable in REGULARIZATION_VARIABLES]
+        # l2_loss = build_l2_loss(trainable_variables, regularization_variables)
+        # q = tf.reduce_mean(q)
+        # loss = Q_WEIGHT * q + L2_WEIGHT * l2_loss
+        loss = tf.reduce_mean(q)
     with vs.variable_scope("optimiser"):
         optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-    return Fetches(optimise, AnalyserLosses(loss, l2_loss, q))
+    return optimise, (loss,)
 
 
 @trace
-def build_feed_dicts(analyser_net: AnalyserNet, batches: list) -> list:
-    inputs, inputs_sizes, initial_decoder_state, *_ = analyser_net.inputs.flatten()
+def build_feed_dicts(inputs, inputs_sizes):
+    methods = dumper.load(VEC_METHODS)
+    baskets = batcher.throwing(methods, [INPUT_SIZE])
+    batches = {basket: batcher.build_batches(data, BATCH_SIZE) for basket, data in baskets.items()}
     feed_dicts = []
-    for batch in batches:
+    for batch in batches[INPUT_SIZE]:
         feed_dict = {}
         for label, (lines, _) in batch.items():
             for _LINE in inputs[label]:
@@ -85,60 +86,78 @@ def build_feed_dicts(analyser_net: AnalyserNet, batches: list) -> list:
                 for i, embedding in enumerate(line):
                     feed_dict[inputs[label][i]].append(embedding)
             feed_dict[inputs_sizes[label]] = tuple(len(emb) for emb in lines)
-        feed_dict[initial_decoder_state] = INITIAL_STATE
         feed_dicts.append(feed_dict)
-    return feed_dicts
+    train_set = feed_dicts[:len(feed_dicts) * TRAIN_SET]
+    validation_set = feed_dicts[len(train_set):]
+    return train_set, validation_set
 
 
 @trace
-def build_batches() -> list:
-    methods = dumper.load(VEC_METHODS)
-    baskets = batcher.throwing(methods, [INPUT_SIZE])
-    batches = {basket: batcher.build_batches(data[:BATCH_SIZE * 2], BATCH_SIZE) for basket, data in baskets.items()}
-    return batches[INPUT_SIZE]
+def build() -> (AnalyserNet, QFunctionNet):
+    analyser_net = AnalyserNet()
+    q_function_net = QFunctionNet()
 
+    inputs, inputs_sizes, _, evaluation = q_function.build_inputs()
+    analyser_net.inputs = inputs
+    analyser_net.inputs_sizes = inputs_sizes
+    q_function_net.inputs = inputs
+    q_function_net.inputs_sizes = inputs_sizes
+    q_function_net.evaluation = evaluation
 
-@trace
-def build() -> (Net, Net):
-    inputs = q_function.build_placeholders()
-    analyser_net = build_net(inputs)
-    analyser_net.inputs.output = analyser_net.outputs.output
-    q_function_net = q_function.build_net(analyser_net.inputs)
-    analyser_net.fetches = build_fetches(q_function_net)
-    batches = build_batches()
-    analyser_net.feed_dicts = build_feed_dicts(analyser_net, batches)
+    output, logits, analyser_scope = build_outputs(inputs, inputs_sizes)
+    analyser_net.output = output
+    analyser_net.logits = logits
+    analyser_net.scope = analyser_scope
+    q_function_net.output = output
+
+    q, q_function_scope = q_function.build_outputs(inputs, inputs_sizes, output)
+    q_function_net.q = q
+    q_function_net.scope = q_function_scope
+
+    train_set, validation_set = build_feed_dicts(inputs, inputs_sizes)
+    analyser_net.train_set = train_set
+    analyser_net.validation_set = validation_set
+
+    optimise, losses = build_fetches(analyser_scope, q)
+    analyser_net.optimise = optimise
+    analyser_net.losses = losses
     return analyser_net, q_function_net
 
 
 @trace
-def pretrain(net: Net):
+def pretrain(analyser_net: AnalyserNet):
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
-        net.save(session)
+        analyser_net.save(session)
 
 
 @trace
-def train(analyser_net: Net, q_function_net: Net, restore: bool = False):
+def train(analyser_net: AnalyserNet, q_function_net: QFunctionNet, restore: bool = False, epochs=ANALYSER_EPOCHS):
+    fetches = (
+        analyser_net.optimise,
+        analyser_net.inputs,
+        analyser_net.output,
+        analyser_net.losses
+    )
     with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        # writer = tf.summary.FileWriter(SEQ2SEQ, session.graph)
-        # writer.close()
-        # exit(1)
+        writer = tf.summary.FileWriter(SEQ2SEQ, session.graph)
+        writer.close()
         try:
             session.run(tf.global_variables_initializer())
             q_function_net.restore(session)
             if restore:
                 analyser_net.restore(session)
-            for epoch in range(ANALYSER_EPOCHS):
-                losses = (0.0 for _ in range(len(analyser_net.fetches.flatten()) - 1))
-                for feed_dict in analyser_net.feed_dicts:
-                    _, *local_losses = session.run(fetches=analyser_net.fetches.flatten(), feed_dict=feed_dict)
-                    losses = (local_losses[i] + loss for i, loss in enumerate(losses))
-                losses = (loss / len(analyser_net.feed_dicts) for loss in losses)
-                loss = next(losses)
-                l2_loss = next(losses)
-                q = next(losses)
-                logging.info("Epoch: {:4d}/{:-4d} Loss: {:.4f} L2Loss: {:.4f} Q: {:.4f}"
-                             .format(epoch, ANALYSER_EPOCHS, loss, l2_loss, q))
+            for epoch in range(epochs):
+                losses = (0.0 for _ in range(len(analyser_net.losses)))
+                evaluation = 0.0
+                for feed_dict in analyser_net.train_set:
+                    _, inputs, output, local_losses = session.run(fetches=fetches, feed_dict=feed_dict)
+                    evaluation += np.mean(contract.evaluate(inputs, output))
+                    losses = [local_losses[i] + loss for i, loss in enumerate(losses)]
+                losses = [loss / len(analyser_net.train_set) for loss in losses]
+                loss = losses[0]
+                evaluation /= len(analyser_net.train_set)
+                logging.info("Epoch: {:4d}/{:<4d} Loss: {:.4f} Eval: {:.4f}".format(epoch, epochs, loss, evaluation))
                 figure.plot(epoch, loss)
                 if epoch % 50:
                     analyser_net.save(session)
@@ -149,17 +168,17 @@ def train(analyser_net: Net, q_function_net: Net, restore: bool = False):
 
 
 @trace
-def test(net: Net):
+def test(analyser_net: AnalyserNet):
     embeddings = list(EMBEDDINGS)
-    first = [net.inputs.inputs[label][0] for label in PARTS]
+    first = [analyser_net.inputs[label][0] for label in PARTS]
     with tf.Session() as session:
-        net.restore(session)
+        analyser_net.restore(session)
         errors = []
         roundLoss = []
         loss = []
         res_loss = []
-        for _feed_dict in net.feed_dicts:
-            result = session.run(fetches=[net.outputs.output, loss] + first, feed_dict=_feed_dict)
+        for _feed_dict in analyser_net.train_set:
+            result = session.run(fetches=[analyser_net.output, loss] + first, feed_dict=_feed_dict)
             outputs = result[0]
             res_loss.append(result[1])
             targets = result[2:]
