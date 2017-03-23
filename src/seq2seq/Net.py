@@ -106,11 +106,13 @@
 #             feed_dicts: list = None
 #     ):
 #         super().__init__(Q_FUNCTION_MODEL, fetches, inputs, outputs, feed_dicts)
+import random
 from abc import ABCMeta
 
 import tensorflow as tf
 
 from variables.path import ANALYSER_MODEL, Q_FUNCTION_MODEL
+from variables.train import BLOCK_SIZE
 
 
 class Net(metaclass=ABCMeta):
@@ -162,3 +164,9 @@ class QFunctionNet(Net):
 
         self.train_set = None
         self.validation_set = None
+
+    def get_train_set(self):
+        return random.sample(self.train_set, min(BLOCK_SIZE, len(self.train_set)))
+
+    def get_validation_set(self):
+        return random.sample(self.validation_set, min(BLOCK_SIZE, len(self.validation_set)))

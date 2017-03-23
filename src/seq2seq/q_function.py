@@ -1,4 +1,4 @@
-import random
+from multiprocessing import Pool
 
 from seq2seq import contract
 from seq2seq.Net import *
@@ -22,13 +22,13 @@ def build_inputs():
         with vs.variable_scope(label):
             inputs[label] = []
             for i in range(INPUT_SIZE):
-                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "input_%d" % i)
+                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "input")
                 inputs[label].append(placeholder)
-                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
+            inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
     with vs.variable_scope("output"):
         output = []
         for i in range(OUTPUT_SIZE):
-            placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, NUM_TOKENS], "output_%d" % i)
+            placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, NUM_TOKENS], "output")
             output.append(placeholder)
     evaluation = tf.placeholder(tf.float32, [BATCH_SIZE], "evaluation")
     return inputs, inputs_sizes, output, evaluation
@@ -73,8 +73,7 @@ def build_fetches(q_function_scope, evaluation, q):
     return optimise, (loss,)
 
 
-def most_different(samples: list, most: int):
-    num_columns = len(samples) / 5
+def most_different(samples: list, most: int, num_columns: int):
     minimum = min(samples, key=lambda x: x[1])[1]
     maximum = max(samples, key=lambda x: x[1])[1]
     minimum -= minimum * 1e-4
@@ -85,10 +84,10 @@ def most_different(samples: list, most: int):
     line = None
     for i in range(maximum):
         num_samples = sum([min(len(samples), i) for _, samples in baskets.items()])
-        if num_samples > most:
+        if num_samples >= most:
             line = i
             break
-    assert line is not None
+    assert line is not None, "NS: {} < M: {}".format(len(samples), most)
     samples = []
     for _, basket in baskets.items():
         random.shuffle(basket)
@@ -96,31 +95,27 @@ def most_different(samples: list, most: int):
     return samples[:most]
 
 
-def noise(array: np.ndarray, std: float):
-    return array + np.random.uniform(-std, std, array.shape)
-
-
 def build_samples(doc, evaluate):
     ARGUMENT = 1
     FUNCTION = 2
 
-    TRUE_SAMPLES_NOISE_STD = 0.1
-    SAMPLES_NOISE_STD = 0.5
-
-    NUM_SAMPLES = 100
-    NUM_TRUE_SAMPLES = 20
+    NUM_SAMPLES = 20
+    NUM_TRUE_SAMPLES = 7
     NUM_GENETIC_CYCLES = 10
     NOISE_DEPTH = 3
+    NUM_COLUMNS = 4
 
     inputs = {}
+    inputs_sizes = {}
     for label, (embeddings, _) in doc:
         inputs[label] = []
+        inputs_sizes[label] = []
         for _ in range(INPUT_SIZE):
             inputs[label].append([])
         line = embeddings + [PAD for _ in range(INPUT_SIZE - len(embeddings))]
+        inputs_sizes[label].append(len(embeddings))
         for i, embedding in enumerate(line):
             inputs[label][i].append(embedding)
-        inputs[label] = np.expand_dims(inputs[label], axis=1)
     samples = []
     for _ in range(NUM_SAMPLES):
         sample = []
@@ -135,69 +130,87 @@ def build_samples(doc, evaluate):
                 arguments = function.arguments
                 expected -= arguments + 1
                 if expected <= 0 or num_functions == 0:
-                    sample.append(noise(Tokens.END.embedding, TRUE_SAMPLES_NOISE_STD))
-                    sample.extend([noise(Tokens.NOP.embedding, TRUE_SAMPLES_NOISE_STD)] * (arguments + expected))
+                    sample.append(Tokens.END.embedding)
+                    sample.extend([Tokens.NOP.embedding] * (arguments + expected))
                     break
-                sample.append(noise(function.embedding, TRUE_SAMPLES_NOISE_STD))
+                sample.append(function.embedding)
                 num_functions -= 1
                 state = ARGUMENT
             elif state == ARGUMENT:
                 i = random.randrange(len(Constants))
                 constant = Constants[i]
-                sample.append(noise(constant.embedding, TRUE_SAMPLES_NOISE_STD))
+                sample.append(constant.embedding)
                 arguments -= 1
                 if arguments == 0:
                     state = FUNCTION
         samples.append((sample, evaluate(inputs, np.expand_dims(sample, axis=1))[0]))
-
-    true_samples = most_different(samples, NUM_TRUE_SAMPLES)
+    true_samples = most_different(samples, NUM_TRUE_SAMPLES, NUM_COLUMNS)
     random.shuffle(samples)
-    samples = samples[:NUM_SAMPLES - NUM_TRUE_SAMPLES]
+    noised_samples = samples[:NUM_SAMPLES - NUM_TRUE_SAMPLES]
     for i in range(NUM_GENETIC_CYCLES):
         for j in range(NUM_SAMPLES - NUM_TRUE_SAMPLES):
-            sample = samples[j][0][::]
-            for k in range(NOISE_DEPTH):
+            sample = noised_samples[j][0][::]
+            indexes = random.sample(list(np.arange(len(sample))), NOISE_DEPTH)
+            for index in indexes:
                 n = random.randrange(NUM_TOKENS)
-                m = random.randrange(len(sample))
-                sample[m] = noise(Tokens.get(n).embedding, SAMPLES_NOISE_STD)
-            samples.append((sample, evaluate(inputs, np.expand_dims(sample, axis=1))[0]))
-        samples = most_different(samples, NUM_SAMPLES - NUM_TRUE_SAMPLES)
-    return true_samples + samples
+                sample[index] = Tokens.get(n).embedding
+            noised_samples.append((sample, evaluate(inputs, np.expand_dims(sample, axis=1))[0]))
+        noised_samples = most_different(noised_samples, NUM_SAMPLES - NUM_TRUE_SAMPLES, NUM_COLUMNS)
+    return (inputs, inputs_sizes), true_samples, noised_samples
+
+
+def build_samples_wrapper(doc, evaluate):
+    inputs, true_samples, noised_samples = build_samples(doc, evaluate)
+    return [(inputs, sample) for sample in true_samples + noised_samples]
+
+
+def build_batch(batch: list):
+    inputs = {}
+    inputs_sizes = {}
+    for label in PARTS:
+        inputs[label] = []
+        inputs_sizes[label] = []
+    samples = []
+    evaluations = []
+    for (inp, inp_sizes), (sample, evaluation) in batch:
+        for label in PARTS:
+            inputs[label].append(inp[label])
+            inputs_sizes[label].append(inp_sizes[label])
+        samples.append(sample)
+        evaluations.append(evaluation)
+    for label in PARTS:
+        inputs[label] = np.transpose(inputs[label], axes=(1, 0, 3, 2))
+        inputs[label] = np.squeeze(inputs[label], axis=(3,))
+        inputs_sizes[label] = np.squeeze(inputs_sizes[label], axis=(1,))
+    samples = np.transpose(samples, axes=(1, 0, 2))
+    return inputs, inputs_sizes, samples, evaluations
 
 
 @trace
-def build_feed_dicts(inputs, inputs_sizes, output, evaluation, evaluate):
+def build_data_set(evaluate):
     methods = dumper.load(VEC_METHODS)
-    baskets = {}
-    for basket, docs in batcher.throwing(methods, [INPUT_SIZE]).items():
-        baskets[basket] = []
-        for doc in docs:
-            samples = build_samples(doc, evaluate)
-            baskets[basket].extend(zip((doc for _ in range(len(samples))), samples))
-        random.shuffle(baskets[basket])
-    batches = {basket: batcher.chunks(data, BATCH_SIZE) for basket, data in baskets.items()}
+    with Pool() as pool:
+        methods_baskets = batcher.throwing(methods, [INPUT_SIZE])
+        docs = methods_baskets[INPUT_SIZE]
+        raw_samples = pool.starmap(build_samples_wrapper, ((doc, evaluate) for doc in docs))
+        samples = [sample for samples in raw_samples for sample in samples]
+        random.shuffle(samples)
+        batches = batcher.chunks(samples, BATCH_SIZE)
+        batches = pool.map(build_batch, batches)
+    return batches
+
+
+@trace
+def build_feed_dicts(inputs, inputs_sizes, output, evaluation):
+    batches = build_data_set(contract.evaluate)
     feed_dicts = []
-    for batch in batches[INPUT_SIZE]:
+    for _inputs, _inputs_sizes, _samples, _evaluations in batches:
         feed_dict = {}
-        _output = []
-        for line in output:
-            feed_dict[line] = []
-            _output.append([])
-        for label, inp in inputs.items():
-            for line in inp:
-                feed_dict[line] = []
-            feed_dict[inputs_sizes[label]] = []
-        feed_dict[evaluation] = []
-        for doc, (sample, eval) in batch:
-            feed_dict[evaluation].append(eval)
-            for label, (embeddings, _) in doc:
-                line = embeddings + [PAD for _ in range(INPUT_SIZE - len(embeddings))]
-                feed_dict[inputs_sizes[label]].append(len(embeddings))
-                for i, embedding in enumerate(line):
-                    feed_dict[inputs[label][i]].append(embedding)
-            for i, embedding in enumerate(sample):
-                feed_dict[output[i]].append(embedding)
-                _output[i].append(embedding)
+        feed_dict.update(zip(output, _samples))
+        for label in PARTS:
+            feed_dict.update(zip(inputs[label], _inputs[label]))
+            feed_dict[inputs_sizes[label]] = _inputs_sizes[label]
+        feed_dict[evaluation] = _evaluations
         feed_dicts.append(feed_dict)
     random.shuffle(feed_dicts)
     train_set = feed_dicts[:int(len(feed_dicts) * TRAIN_SET)]
@@ -219,7 +232,7 @@ def build() -> QFunctionNet:
     q_function_net.q = q
     q_function_net.scope = q_function_scope
 
-    train_set, validation_set = build_feed_dicts(inputs, inputs_sizes, output, evaluation, contract.evaluate)
+    train_set, validation_set = build_feed_dicts(inputs, inputs_sizes, output, evaluation)
     q_function_net.train_set = train_set
     q_function_net.validation_set = validation_set
 
@@ -236,25 +249,26 @@ def train(q_function_net: QFunctionNet, restore: bool = False, epochs=Q_FUNCTION
         q_function_net.losses
     )
     with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        writer = tf.summary.FileWriter(SEQ2SEQ, session.graph)
-        writer.close()
         try:
             session.run(tf.global_variables_initializer())
             if restore:
                 q_function_net.restore(session)
+            raw_size = 10
+            formatter = "{{:^{size:d}s}}{{:^{size:d}s}}{{:^{size:d}s}}".format(size=raw_size)
+            logging.info(formatter.format("Epoch", "TrnLoss", "VldLoss"))
             for epoch in range(1, epochs + 1):
-                train_loss = 0.0
-                for feed_dict in q_function_net.train_set:
-                    _, (local_loss, *_) = session.run(fetches=fetches, feed_dict=feed_dict)
-                    train_loss += local_loss
-                train_loss /= len(q_function_net.train_set)
-                validation_loss = 0.0
-                for feed_dict in q_function_net.validation_set:
-                    local_loss, *_ = session.run(fetches=q_function_net.losses, feed_dict=feed_dict)
-                    validation_loss += local_loss
-                validation_loss /= len(q_function_net.validation_set)
-                logging.info("Epoch: {:4d}/{:<4d} TrainLoss: {:.4f} ValidationLoss: {:.4f}"
-                             .format(epoch, epochs, train_loss, validation_loss))
+                train_losses = []
+                for feed_dict in q_function_net.get_train_set():
+                    _, (loss, *_) = session.run(fetches=fetches, feed_dict=feed_dict)
+                    train_losses.append(loss)
+                validation_losses = []
+                for feed_dict in q_function_net.get_validation_set():
+                    loss, *_ = session.run(fetches=q_function_net.losses, feed_dict=feed_dict)
+                    validation_losses.append(loss)
+                train_loss = np.mean(train_losses)
+                validation_loss = np.mean(validation_losses)
+                formatter = "{{:^{size:d}s}}{{:^{size:d}.4f}}{{:^{size:d}.4f}}".format(size=raw_size)
+                logging.info(formatter.format("{:4d}/{:<4d}".format(epoch, epochs), train_loss, validation_loss))
                 figure.plot(epoch, train_loss, ".b")
                 figure.plot(epoch, validation_loss, ".r")
                 if epoch % 50:

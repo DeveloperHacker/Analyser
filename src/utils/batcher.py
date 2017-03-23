@@ -52,21 +52,19 @@ def chunks(line, n):
         yield line[i:i + n]
 
 
-def hist(data: list, basket_sizes: list, key=None):
-    if not key:
-        key = lambda x: x
+def hist(data: list, basket_sizes: list, key=None) -> dict:
     basket_sizes = list(sorted(basket_sizes))
     baskets = {basket: [] for basket in basket_sizes}
     for datum in data:
         for i, right in enumerate(basket_sizes):
             left = basket_sizes[i - 1] if i > 0 else 0
-            if left < key(datum) < right:
+            if left < datum if key is None else key(datum) < right:
                 baskets[right].append(datum)
     return baskets
 
 
 @trace
-def throwing(data: list, basket_sizes: list):
+def throwing(data: list, basket_sizes: list) -> dict:
     key = lambda datum: max([len(embeddings) for label, (embeddings, text) in datum])
     return hist(data, basket_sizes, key=key)
 

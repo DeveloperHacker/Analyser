@@ -21,9 +21,9 @@ def build_inputs():
         with vs.variable_scope(label):
             inputs[label] = []
             for i in range(INPUT_SIZE):
-                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch_%d" % i)
+                placeholder = tf.placeholder(tf.float32, [BATCH_SIZE, EMBEDDING_SIZE], "batch")
                 inputs[label].append(placeholder)
-                inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
+            inputs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes")
     return inputs, inputs_sizes
 
 
@@ -76,7 +76,7 @@ def build_feed_dicts(inputs, inputs_sizes):
     baskets = batcher.throwing(methods, [INPUT_SIZE])
     batches = {basket: batcher.build_batches(data, BATCH_SIZE) for basket, data in baskets.items()}
     feed_dicts = []
-    for batch in batches[INPUT_SIZE]:
+    for batch in batches[INPUT_SIZE][:100]:
         feed_dict = {}
         for label, (lines, _) in batch.items():
             for _LINE in inputs[label]:
@@ -87,7 +87,7 @@ def build_feed_dicts(inputs, inputs_sizes):
                     feed_dict[inputs[label][i]].append(embedding)
             feed_dict[inputs_sizes[label]] = tuple(len(emb) for emb in lines)
         feed_dicts.append(feed_dict)
-    train_set = feed_dicts[:len(feed_dicts) * TRAIN_SET]
+    train_set = feed_dicts[:int(len(feed_dicts) * TRAIN_SET)]
     validation_set = feed_dicts[len(train_set):]
     return train_set, validation_set
 
