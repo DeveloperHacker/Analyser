@@ -8,6 +8,7 @@ METHODS = DATA_SETS + "/methods.xml"
 VEC_METHODS = DATA_SETS + "/methods.pickle"
 EMBEDDINGS = DATA_SETS + "/word2vec.pickle"
 CONTEXTS = DATA_SETS + "/contexts.pickle"
+PRETRAIN_SETS = DATA_SETS + "/pretrain_sets"
 
 NETS = RESOURCES + "/nets"
 

@@ -30,16 +30,16 @@ def evaluate(inputs: dict, output: list):
                     loss += 2.0 * (len(uids) - i)
                     state = NOP
                 else:
-                    loss += 10.0 / (i + 1)
+                    loss += 10.0
             elif state == ARGUMENT:
                 if not isinstance(token, Constant):
-                    loss += 10.0 / (i + 1)
+                    loss += 10.0
                 args -= 1
                 if args == 0:
                     state = FUNCTION
             elif state == NOP:
                 if token != Tokens.NOP:
-                    loss += 10.0
+                    loss += 3.0
         if state != NOP:
             loss += 7.0
         losses.append(loss)

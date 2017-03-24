@@ -8,7 +8,7 @@ from utils.Figure import Figure
 from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import INITIAL_STATE, PAD
-from variables.path import SEQ2SEQ, VEC_METHODS
+from variables.path import VEC_METHODS, PRETRAIN_SETS
 from variables.sintax import *
 from variables.tags import *
 from variables.train import *
@@ -32,6 +32,13 @@ def build_inputs():
             output.append(placeholder)
     evaluation = tf.placeholder(tf.float32, [BATCH_SIZE], "evaluation")
     return inputs, inputs_sizes, output, evaluation
+
+
+@trace
+def build_noise(output):
+    noise = tf.truncated_normal(output.shape)
+    output = output + noise
+    return output
 
 
 @trace
@@ -67,10 +74,13 @@ def build_outputs(inputs, inputs_sizes, output):
 def build_fetches(q_function_scope, evaluation, q):
     with vs.variable_scope("loss"):
         trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, q_function_scope)
-        loss = tf.reduce_mean(tf.square(evaluation - q))
+        regularization_variables = [q_function_scope + "/" + variable for variable in REGULARIZATION_VARIABLES]
+        diff = tf.reduce_mean(tf.square(evaluation - q))
+        l2_loss = build_l2_loss(trainable_variables, regularization_variables)
+        loss = DIFF_WEIGHT * diff + L2_WEIGHT * l2_loss
     with vs.variable_scope("optimiser"):
         optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-    return optimise, (loss,)
+    return optimise, (loss, diff, l2_loss)
 
 
 def most_different(samples: list, most: int, num_columns: int):
@@ -189,9 +199,9 @@ def build_batch(batch: list):
 @trace
 def build_data_set(evaluate):
     methods = dumper.load(VEC_METHODS)
+    methods_baskets = batcher.throwing(methods, [INPUT_SIZE])
+    docs = methods_baskets[INPUT_SIZE]
     with Pool() as pool:
-        methods_baskets = batcher.throwing(methods, [INPUT_SIZE])
-        docs = methods_baskets[INPUT_SIZE]
         raw_samples = pool.starmap(build_samples_wrapper, ((doc, evaluate) for doc in docs))
         samples = [sample for samples in raw_samples for sample in samples]
         random.shuffle(samples)
@@ -243,40 +253,80 @@ def build() -> QFunctionNet:
 
 
 @trace
+def build_pretrain_set():
+    path = PRETRAIN_SETS + "/set-{}".format(time.strftime("%d-%m-%Y-%H-%M-%S") + ".txt")
+    methods = dumper.load(VEC_METHODS)
+    methods_baskets = batcher.throwing(methods, [INPUT_SIZE])
+    docs = methods_baskets[INPUT_SIZE]
+    with Pool() as pool:
+        num_samples = 0
+        while num_samples < MGS:
+            raw_samples = pool.starmap(build_samples_wrapper, ((doc, contract.evaluate) for doc in docs))
+            samples = [sample for samples in raw_samples for sample in samples]
+            pretrain_set = dict()
+            for inputs, (sample, evaluation) in samples:
+                if evaluation < 2:
+                    indexes = (str(int(np.argmax(embedding))) for embedding in sample)
+                    pretrain_set[" ".join(indexes)] = (inputs, evaluation)
+            num_samples += len(pretrain_set)
+            # ToDo: inputs saver
+            with open(path, "a") as writer:
+                for sample, (inputs, evaluation) in pretrain_set.items():
+                    writer.write(str(evaluation) + " : " + sample + "\n")
+
+
+@trace
 def train(q_function_net: QFunctionNet, restore: bool = False, epochs=Q_FUNCTION_EPOCHS):
-    fetches = (
-        q_function_net.optimise,
-        q_function_net.losses
-    )
-    with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
-        try:
-            session.run(tf.global_variables_initializer())
-            if restore:
-                q_function_net.restore(session)
-            raw_size = 10
-            formatter = "{{:^{size:d}s}}{{:^{size:d}s}}{{:^{size:d}s}}".format(size=raw_size)
-            logging.info(formatter.format("Epoch", "TrnLoss", "VldLoss"))
-            for epoch in range(1, epochs + 1):
-                train_losses = []
-                for feed_dict in q_function_net.get_train_set():
-                    _, (loss, *_) = session.run(fetches=fetches, feed_dict=feed_dict)
-                    train_losses.append(loss)
-                validation_losses = []
-                for feed_dict in q_function_net.get_validation_set():
-                    loss, *_ = session.run(fetches=q_function_net.losses, feed_dict=feed_dict)
-                    validation_losses.append(loss)
-                train_loss = np.mean(train_losses)
-                validation_loss = np.mean(validation_losses)
-                formatter = "{{:^{size:d}s}}{{:^{size:d}.4f}}{{:^{size:d}.4f}}".format(size=raw_size)
-                logging.info(formatter.format("{:4d}/{:<4d}".format(epoch, epochs), train_loss, validation_loss))
-                figure.plot(epoch, train_loss, ".b")
-                figure.plot(epoch, validation_loss, ".r")
-                if epoch % 50:
+    fail = True
+    fail_counter = 0
+    while fail:
+        fetches = (
+            q_function_net.optimise,
+            q_function_net.losses
+        )
+        with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
+            try:
+                session.run(tf.global_variables_initializer())
+                if restore:
+                    q_function_net.restore(session)
+                q_function_net.mkdir()
+                size = 13
+                head1 = ("|" + "{{:^{size1:d}s}}|" + "{{:^{size2:d}s}}|" * 2).format(
+                    size1=size * 3 // 2 + 2,
+                    size2=size * 3 + 2)
+                head2 = ("|" + "{{:^{size1:d}s}}|" + "{{:^{size:d}s}}|" * 7).format(size1=size // 2 + 1, size=size)
+                line = ("|" + "{{:^{size1:d}d}}|" + "{{:^{size:d}.4f}}|" * 7).format(size1=size // 2 + 1, size=size)
+                logging.info(head1.format("", "train", "validation"))
+                logging.info(head2.format("epoch", "time", "loss", "diff", "l2_loss", "loss", "diff", "l2_loss"))
+                for epoch in range(1, epochs + 1):
+                    train_losses = []
+                    clock = time.time()
+                    for feed_dict in q_function_net.get_train_set():
+                        _, losses = session.run(fetches=fetches, feed_dict=feed_dict)
+                        train_losses.append(losses)
+                    validation_losses = []
+                    for feed_dict in q_function_net.get_validation_set():
+                        losses = session.run(fetches=q_function_net.losses, feed_dict=feed_dict)
+                        validation_losses.append(losses)
+                    delay = time.time() - clock
+                    train_loss = np.mean(train_losses, axis=(0,))
+                    validation_loss = np.mean(validation_losses, axis=(0,))
+                    logging.info(line.format(epoch, delay, *train_loss, *validation_loss))
+                    figure.plot(epoch, train_loss[0], ".b")
+                    figure.plot(epoch, validation_loss[0], ".r")
                     q_function_net.save(session)
-        except SIGINTException:
-            logging.error("SIGINT")
-        finally:
-            q_function_net.save(session)
+
+                    # ToDo: something. It is not normal trace approach
+                    fail = epoch in LPR and (train_loss[0] > LPR[epoch] or validation_loss[0] > LPR[epoch])
+                    if fail:
+                        logging.info("FAIL")
+                        fail_counter += 1
+                        break
+            except SIGINTException:
+                logging.info("SIGINT")
+            finally:
+                q_function_net.save(session)
+    print("Number of fails: {}".format(fail_counter))
 
 
 @trace

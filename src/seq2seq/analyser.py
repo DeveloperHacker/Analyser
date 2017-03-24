@@ -8,7 +8,7 @@ from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
-from variables.sintax import NUM_TOKENS
+from variables.sintax import NUM_TOKENS, Tokens
 from variables.tags import *
 from variables.train import *
 
@@ -168,31 +168,26 @@ def train(analyser_net: AnalyserNet, q_function_net: QFunctionNet, restore: bool
 
 
 @trace
-def test(analyser_net: AnalyserNet):
-    embeddings = list(EMBEDDINGS)
-    first = [analyser_net.inputs[label][0] for label in PARTS]
+def test(analyser_net: AnalyserNet, q_function_net: QFunctionNet):
+    fetches = (
+        analyser_net.inputs,
+        analyser_net.output,
+        analyser_net.losses
+    )
     with tf.Session() as session:
+        session.run(tf.global_variables_initializer())
+        q_function_net.restore(session)
         analyser_net.restore(session)
-        errors = []
-        roundLoss = []
-        loss = []
-        res_loss = []
-        for _feed_dict in analyser_net.train_set:
-            result = session.run(fetches=[analyser_net.output, loss] + first, feed_dict=_feed_dict)
-            outputs = result[0]
-            res_loss.append(result[1])
-            targets = result[2:]
-            assert len(targets) == 4
-            for output, target in zip(outputs[:4], targets):
-                for out, tar in zip(output, target):
-                    i = np.argmin([np.linalg.norm(out - embedding) for embedding in embeddings])
-                    errors.append(np.linalg.norm(embeddings[i] - tar) > 1e-6)
-                    roundLoss.append(np.linalg.norm(embeddings[i] - tar))
-                    loss.append(np.linalg.norm(out - tar))
-        logging.info("Accuracy: {}%".format((1 - np.mean(errors)) * 100))
-        logging.info("RoundLoss: {}".format(np.mean(roundLoss)))
-        logging.info("Loss: {}".format(np.mean(loss)))
-        logging.info("ResLoss: {}".format(np.mean(res_loss)))
+        for feed_dict in analyser_net.train_set:
+            _inputs, _output, (loss, *_) = session.run(fetches=fetches, feed_dict=feed_dict)
+            output = [[] for _ in range(len(_output))]
+            for i, distributions in enumerate(_output):
+                indexes = np.argmax(distributions, axis=1)
+                for idx in indexes:
+                    output[i].append(Tokens.get(idx).name)
+            evaluation = np.mean(contract.evaluate(_inputs, _output))
+            for tokens in output:
+                print(" ".join(("{:10s}".format(token) for token in tokens)), loss, evaluation)
 
 
 @trace
@@ -203,4 +198,4 @@ def run(foo: str):
     elif foo == "restore":
         train(analyser_net, q_function_net, True)
     elif foo == "test":
-        test(analyser_net)
+        test(analyser_net, q_function_net)
