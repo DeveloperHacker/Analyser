@@ -6,16 +6,15 @@ from variables.tags import PARTS
 
 
 def reshape(batch: list):
-    new_batch = {label: ([], []) for label in PARTS}
+    new_batch = {label: [] for label in PARTS}
     for joined in batch:
-        for label, (embs, text) in joined:
-            new_batch[label][0].append(embs)
-            new_batch[label][1].append(text)
-    return new_batch
+        for label, embs in joined:
+            new_batch[label].append(embs)
+    return list(new_batch.items())
 
 
 def vector(data: list) -> np.ndarray:
-    return np.asarray([len(embs) for label, (embs, text) in data])
+    return np.asarray([len(embeddings) for label, embeddings in data])
 
 
 def vectorization(joined: list, embeddings: dict):
@@ -47,9 +46,9 @@ def firstNMax(clusters: list, n: int):
     return indexes, maxes
 
 
-def chunks(line, n):
-    for i in range(0, len(line), n):
-        yield line[i:i + n]
+def chunks(line: list, block_size: int):
+    for i in range(0, len(line), block_size):
+        yield line[i:i + block_size]
 
 
 def hist(data: list, basket_sizes: list, key=None) -> dict:
@@ -65,7 +64,7 @@ def hist(data: list, basket_sizes: list, key=None) -> dict:
 
 @trace
 def throwing(data: list, basket_sizes: list) -> dict:
-    key = lambda datum: max([len(embeddings) for label, (embeddings, text) in datum])
+    key = lambda datum: max([len(embeddings) for label, embeddings in datum])
     return hist(data, basket_sizes, key=key)
 
 

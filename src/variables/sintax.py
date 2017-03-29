@@ -59,7 +59,6 @@ class Tokens:
     NOT_EQUAL = Function("not equal", 2)
     IS = Function("is", 2)
     NOT_IS = Function("not is", 2)
-    # PUNCTUATION = Delimiter("punctuation")
     END = Delimiter("end")
     NOP = Delimiter("nop")
 
