@@ -1,5 +1,4 @@
 import os
-import random
 import time
 from abc import ABCMeta
 
@@ -20,20 +19,30 @@ class Net(metaclass=ABCMeta):
     def __init__(self, name: str):
         self.scope = None
         self._saver = None
-        self.name = name
+        self.name = name + "-net-"
         self.path = None
         self.train_set = None
         self.validation_set = None
-        self.postfix = "-net-"
+        self.train_set_ptr = 0
+        self.validation_set_ptr = 0
+
+    @staticmethod
+    def get_part(data_set, ptr, step):
+        left = ptr
+        right = min(len(data_set), ptr + step)
+        ptr = 0 if right == len(data_set) else ptr + step
+        return data_set[left: right], ptr
 
     def get_train_set(self):
-        return random.sample(self.train_set, min(BLOCK_SIZE, len(self.train_set)))
+        data_set, self.train_set_ptr = Net.get_part(self.train_set, self.train_set_ptr, BLOCK_SIZE)
+        return data_set
 
     def get_validation_set(self):
-        return random.sample(self.validation_set, min(BLOCK_SIZE, len(self.validation_set)))
+        data_set, self.validation_set_ptr = Net.get_part(self.validation_set, self.validation_set_ptr, BLOCK_SIZE)
+        return data_set
 
     def mkdir(self):
-        self.path = SEQ2SEQ + "/" + self.name + self.postfix + time.strftime("%d-%m-%Y-%H-%M-%S")
+        self.path = SEQ2SEQ + "/" + self.name + time.strftime("%d-%m-%Y-%H-%M-%S")
         os.mkdir(self.path)
 
     def save(self, session: tf.Session):
@@ -45,8 +54,8 @@ class Net(metaclass=ABCMeta):
         date = None
         names = []
         for name in os.listdir(SEQ2SEQ):
-            if self.name + self.postfix in name:
-                names.append(name[len(self.name) + len(self.postfix):])
+            if self.name in name:
+                names.append(name[len(self.name):])
         max_date = None
         for date in names:
             splitted = [0.0] * 6
@@ -66,5 +75,5 @@ class Net(metaclass=ABCMeta):
 
     def restore(self, session: tf.Session, date: str = None):
         date = self.newest() if date is None else date
-        self.path = "{}/{}{}{}".format(SEQ2SEQ, self.name, self.postfix, date)
+        self.path = "{}/{}{}".format(SEQ2SEQ, self.name, date)
         self.saver.restore(session, self.path + "/model.ckpt")

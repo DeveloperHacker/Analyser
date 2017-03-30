@@ -18,13 +18,12 @@ OUTPUT_SIZE = 10
 
 CONTAINS_WEIGHT = 1
 VARIANCE_WEIGHT = 1
-Q_WEIGHT = 1
+Q_WEIGHT = 10
 DIFF_WEIGHT = 1
 L2_WEIGHT = 0.0001
 OH_WEIGHT = 1
 
-BLOCK_SIZE = BATCH_SIZE * 25
-INITIALIZATION_STD = 0.1
+BLOCK_SIZE = 100
 
 REGULARIZATION_VARIABLES = (
     "head/encoder/bidirectional_rnn/fw/gru_cell/candidate/weights:0",
@@ -38,7 +37,7 @@ REGULARIZATION_VARIABLES = (
     "output/encoder/bidirectional_rnn/fw/gru_cell/candidate/weights:0",
     "q-function/output/encoder/bidirectional_rnn/bw/gru_cell/candidate/weights:0",
     "decoder/attention_decoder/gru_cell/candidate/weights:0",
-    "loss/weights:0",
+    "evaluation/weights:0",
     "decoder/weights:0",
     "decoder/attention_decoder/AttnW_0:0",
     "decoder/attention_decoder/weights:0",

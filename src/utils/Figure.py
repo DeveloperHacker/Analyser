@@ -4,7 +4,7 @@ from matplotlib import pyplot
 class Figure:
     def __init__(self, num=None, xmin=0, xmax=1, xauto=False, ymin=0, ymax=1, yauto=True, xlabel=None, ylabel=None,
                  resolution=None, grid=True, warn=False):
-        if resolution is None: resolution = [10, 10]
+        if resolution is None: resolution = [8, 8]
         self._figure = pyplot.figure(num)
         self._figure.set_size_inches(*resolution)
         plot = self._figure.gca()

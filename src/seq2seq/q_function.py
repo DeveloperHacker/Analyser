@@ -74,13 +74,11 @@ class QFunctionNet(Net):
             Q, _ = build_decoder(output_states, inputs_states, INPUT_STATE_SIZE, INITIAL_STATE, 1)
             Q = tf.nn.relu(Q)
             Q = tf.transpose(tf.reshape(tf.stack(Q), [OUTPUT_SIZE, BATCH_SIZE]), [1, 0])
-            with vs.variable_scope("loss"):
+            with vs.variable_scope("evaluation"):
                 W_shape = [OUTPUT_STATE_SIZE * 2, 1]
                 B_shape = [1]
-                std = INITIALIZATION_STD
-                W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=std, dtype=tf.float32),
-                                name="weights")
-                B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=std, dtype=tf.float32), name="biases")
+                W = tf.Variable(initial_value=tf.truncated_normal(W_shape, dtype=tf.float32), name="weights")
+                B = tf.Variable(initial_value=tf.truncated_normal(B_shape, dtype=tf.float32), name="biases")
                 output_states = tf.reshape(tf.stack(output_states), [BATCH_SIZE * OUTPUT_SIZE, OUTPUT_STATE_SIZE * 2])
                 I = tf.sigmoid(tf.reshape(tf.matmul(output_states, W) + B, [BATCH_SIZE, OUTPUT_SIZE]))
                 q = tf.reduce_sum(Q * I, axis=1)

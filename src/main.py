@@ -3,8 +3,9 @@ import logging
 import sys
 
 import word2vec.word2vec as word2vec
-from seq2seq import contracts, analyser, q_function
+from seq2seq import contracts
 from seq2seq.analyser import AnalyserNet
+from seq2seq.münchhausen import MünchhausenNet
 from seq2seq.q_function import QFunctionNet
 from utils import handlers
 from variables.path import *
@@ -33,8 +34,14 @@ def main(args):
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
         if "analyser" in args.data_set:
             AnalyserNet.build_data_set()
-        if "q_function" in args.data_set:
+        elif "q_function" in args.data_set:
             QFunctionNet.build_data_set()
+        elif "münchhausen" in args.data_set:
+            MünchhausenNet.build_data_set()
+    elif args.münchhausen:
+        logging.basicConfig(level=logging.INFO, filename=MÜNCHHAUSEN_LOG)
+        logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+        MünchhausenNet.run(args.münchhausen)
 
 
 if __name__ == '__main__':
@@ -44,5 +51,6 @@ if __name__ == '__main__':
     parser.add_argument("--analyser", choices=["train", "restore", "test"], default=False)
     parser.add_argument("--q_function", choices=["train", "restore", "test"], default=False)
     parser.add_argument("--contracts", choices=["train", "restore", "test"], default=False)
-    parser.add_argument("--data_set", choices=["analyser", "q_function"], default=False)
+    parser.add_argument("--münchhausen", choices=["train", "restore", "test"], default=False)
+    parser.add_argument("--data_set", choices=["analyser", "q_function", "münchhausen"], default=False)
     main(parser.parse_args(sys.argv[1:]))

@@ -65,10 +65,8 @@ class AnalyserNet(Net):
             with vs.variable_scope("softmax"):
                 W_shape = [EMBEDDING_SIZE, NUM_TOKENS]
                 B_shape = [NUM_TOKENS]
-                std = INITIALIZATION_STD
-                W = tf.Variable(initial_value=tf.truncated_normal(W_shape, stddev=std, dtype=tf.float32),
-                                name="weights")
-                B = tf.Variable(initial_value=tf.truncated_normal(B_shape, stddev=std, dtype=tf.float32), name="biases")
+                W = tf.Variable(initial_value=tf.truncated_normal(W_shape, dtype=tf.float32), name="weights")
+                B = tf.Variable(initial_value=tf.truncated_normal(B_shape, dtype=tf.float32), name="biases")
                 output = tf.reshape(tf.stack(output), [BATCH_SIZE * OUTPUT_SIZE, EMBEDDING_SIZE])
                 logits = tf.reshape(tf.matmul(output, W) + B, [OUTPUT_SIZE, BATCH_SIZE, NUM_TOKENS])
                 output = tf.nn.softmax(logits)
