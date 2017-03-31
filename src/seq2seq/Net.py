@@ -9,23 +9,6 @@ from variables.train import BLOCK_SIZE
 
 
 class Net(metaclass=ABCMeta):
-    @property
-    def saver(self):
-        if self._saver is None:
-            trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
-            self._saver = tf.train.Saver(var_list=trainable_variables)
-        return self._saver
-
-    def __init__(self, name: str):
-        self.scope = None
-        self._saver = None
-        self.name = name + "-net-"
-        self.path = None
-        self.train_set = None
-        self.validation_set = None
-        self.train_set_ptr = 0
-        self.validation_set_ptr = 0
-
     @staticmethod
     def get_part(data_set, ptr, step):
         left = ptr
@@ -41,6 +24,42 @@ class Net(metaclass=ABCMeta):
         data_set, self.validation_set_ptr = Net.get_part(self.validation_set, self.validation_set_ptr, BLOCK_SIZE)
         return data_set
 
+    def get_optimiser(self):
+        optimiser = self.optimisers[self.optimisers_prt]
+        self.optimisers_prt = (self.optimisers_prt + 1) % len(self.optimisers)
+        return optimiser
+
+    def get_saver(self):
+        if self._saver is None:
+            self._saver = tf.train.Saver(var_list=self.get_variables())
+        return self._saver
+
+    def get_variables(self):
+        if self._variables is None:
+            self._variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
+        return self._variables
+
+    def __init__(self, name: str):
+        self.scope = None
+        self._variables = None
+        self._saver = None
+        self.name = name + "-net-"
+        self.path = None
+
+        self.train_set = None
+        self.validation_set = None
+        self.train_set_ptr = 0
+        self.validation_set_ptr = 0
+
+        self.optimisers = None
+        self.optimisers_prt = 0
+
+    def reset(self, session: tf.Session):
+        self.path = None
+        self._saver = None
+        self.mkdir()
+        session.run(tf.variables_initializer(self.get_variables()))
+
     def mkdir(self):
         self.path = SEQ2SEQ + "/" + self.name + time.strftime("%d-%m-%Y-%H-%M-%S")
         os.mkdir(self.path)
@@ -48,7 +67,7 @@ class Net(metaclass=ABCMeta):
     def save(self, session: tf.Session):
         if self.path is None:
             self.mkdir()
-        self.saver.save(session, self.path + "/model.ckpt")
+        self.get_saver().save(session, self.path + "/model-{}.ckpt".format(time.strftime("%d-%m-%Y-%H-%M-%S")))
 
     def newest(self):
         date = None
@@ -74,6 +93,7 @@ class Net(metaclass=ABCMeta):
         return date
 
     def restore(self, session: tf.Session, date: str = None):
-        date = self.newest() if date is None else date
+        if date is None:
+            date = self.newest()
         self.path = "{}/{}{}".format(SEQ2SEQ, self.name, date)
-        self.saver.restore(session, self.path + "/model.ckpt")
+        self.get_saver().restore(session, self.path + "/model.ckpt")

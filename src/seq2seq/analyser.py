@@ -20,7 +20,6 @@ class AnalyserNet(Net):
         self.inputs = None
         self.inputs_sizes = None
         self.output = None
-        self.optimise = None
         self.q = None
         self.losses = None
 
@@ -86,8 +85,8 @@ class AnalyserNet(Net):
             oh_loss = tf.log(2.0 - tf.reduce_mean(oh_loss))
             loss = Q_WEIGHT * q + L2_WEIGHT * l2_loss
         with vs.variable_scope("optimiser"):
-            optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-        self.optimise = optimise
+            optimiser = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
+        self.optimisers = (optimiser,)
         self.losses = (loss, q, l2_loss, oh_loss)
 
     @staticmethod
@@ -157,7 +156,7 @@ class AnalyserNet(Net):
             self.save(session)
 
     @trace
-    def train(self, q_function_net: QFunctionNet, restore: bool = False, epochs=ANALYSER_EPOCHS):
+    def train(self, q_function_net: QFunctionNet, restore: bool = False):
         data = None
         validation_fetches = (
             self.indexes,
@@ -166,7 +165,7 @@ class AnalyserNet(Net):
             self.output,
             self.losses
         )
-        train_fetches = (self.optimise,) + validation_fetches
+        train_fetches = (self.get_optimiser(),) + validation_fetches
         with tf.Session() as session, tf.device('/cpu:0'), Figure(xauto=True) as figure:
             try:
                 session.run(tf.global_variables_initializer())
@@ -181,7 +180,7 @@ class AnalyserNet(Net):
                 line = ("|" + "{{:^{size1:d}d}}|" + "{{:^{size:d}.4f}}|" * 11).format(size1=size // 2 + 1, size=size)
                 logging.info(head1.format("", "train", "validation"))
                 logging.info(head2.format("epoch", "time", *(("loss", "q", "l2_loss", "oh_loss", "eval") * 2)))
-                for epoch in range(1, epochs + 1):
+                for epoch in range(1, ANALYSER_EPOCHS + 1):
                     data = []
                     train_losses = []
                     validation_losses = []

@@ -74,8 +74,8 @@ def train(analyser_net: AnalyserNet, q_function_net: QFunctionNet, restore: bool
     last_train_sets = [[]] * 3
     last_validation_sets = [[]] * 3
     for epoch in range(epochs):
-        q_function_net.train(epochs=10)
-        batches = analyser_net.train(q_function_net, True, epochs=10)
+        q_function_net.train()
+        batches = analyser_net.train(q_function_net, True)
         last_train_sets.pop(0)
         last_validation_sets.pop(0)
         q_function_net.build_feed_dicts(batches)

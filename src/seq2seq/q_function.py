@@ -1,3 +1,4 @@
+import random
 from multiprocessing import Pool
 
 from seq2seq import contracts
@@ -22,7 +23,6 @@ class QFunctionNet(Net):
         self.inputs_sizes = None
         self.output = None
         self.evaluation = None
-        self.optimise = None
         self.q = None
         self.losses = None
 
@@ -95,8 +95,8 @@ class QFunctionNet(Net):
             l2_loss = build_l2_loss(trainable_variables, regularization_variables)
             loss = DIFF_WEIGHT * diff + L2_WEIGHT * l2_loss
         with vs.variable_scope("optimiser"):
-            optimise = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
-        self.optimise = optimise
+            optimiser = tf.train.AdamOptimizer(beta1=0.90).minimize(loss, var_list=trainable_variables)
+        self.optimisers = (optimiser, )
         self.losses = (loss, diff, l2_loss)
 
     @staticmethod
@@ -172,11 +172,10 @@ class QFunctionNet(Net):
             samples.append((sample, evaluate(indexes, np.expand_dims(sample, axis=1))[0]))
         true_samples = QFunctionNet.most_different(samples, NUM_TRUE_SAMPLES)
         random.shuffle(samples)
-        noised_samples = QFunctionNet.noise_samples(samples[:NUM_SAMPLES - NUM_TRUE_SAMPLES])
+        noised_samples = QFunctionNet.noise_samples(indexes, samples[:NUM_SAMPLES - NUM_TRUE_SAMPLES], evaluate)
         return (indexes, inputs_sizes), true_samples, noised_samples
 
     @staticmethod
-    @trace
     def noise_samples(inputs, samples, evaluate):
         NUM_GENETIC_CYCLES = 10
         NOISE_DEPTH = 3
@@ -234,7 +233,7 @@ class QFunctionNet(Net):
         with Pool() as pool:
             docs = pool.map(QFunctionNet.indexes, methods)
             docs_baskets = batcher.throwing(docs, [INPUT_SIZE])
-            docs = docs_baskets[INPUT_SIZE]
+            docs = docs_baskets[INPUT_SIZE][:100]
             raw_samples = pool.starmap(QFunctionNet.build_samples_wrapper, ((doc, evaluate) for doc in docs))
             samples = [sample for samples in raw_samples for sample in samples]
             random.shuffle(samples)
@@ -277,9 +276,9 @@ class QFunctionNet(Net):
         self.build_feed_dicts(QFunctionNet.data_set())
 
     @trace
-    def train(self, restore: bool = False, epochs=Q_FUNCTION_EPOCHS):
+    def train(self, restore: bool = False):
         fetches = (
-            self.optimise,
+            self.optimisers,
             self.losses
         )
         fail = True
@@ -298,7 +297,7 @@ class QFunctionNet(Net):
                     line = ("|" + "{{:^{size:d}.4f}}|" * 8).format(size=size)
                     logging.info(head1.format("", "train", "validation"))
                     logging.info(head2.format("epoch", "time", "loss", "diff", "l2_loss", "loss", "diff", "l2_loss"))
-                    for epoch in range(1, epochs + 1):
+                    for epoch in range(1, Q_FUNCTION_EPOCHS + 1):
                         train_losses = []
                         clock = time.time()
                         for feed_dict in self.get_train_set():
