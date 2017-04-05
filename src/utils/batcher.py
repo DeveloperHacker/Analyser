@@ -38,7 +38,7 @@ def firstNMax(clusters: list, n: int):
             maxes.append(length)
             indexes.append(i)
         else:
-            i_minimum = np.argmin(maxes)
+            i_minimum = np.argmin(maxes)[0]
             minimum = maxes[i_minimum]
             if minimum < length:
                 maxes[i_minimum] = length

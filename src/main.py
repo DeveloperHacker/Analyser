@@ -7,12 +7,10 @@ from seq2seq import contracts
 from seq2seq.analyser import AnalyserNet
 from seq2seq.münchhausen import MünchhausenNet
 from seq2seq.q_function import QFunctionNet
-from utils import handlers
 from variables.path import *
 
 
 def main(args):
-    handlers.sigint()
     if args.embedding:
         logging.basicConfig(level=logging.INFO, filename=WORD2VEC_LOG)
         logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
