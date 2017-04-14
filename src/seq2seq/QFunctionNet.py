@@ -5,12 +5,12 @@ from seq2seq import contracts
 from seq2seq.Net import *
 from seq2seq.seq2seq import *
 from utils import batcher, dumper
-from utils.Figure import Figure
+from live_plotter.Figure import Figure
 from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
-from variables.sintax import *
+from variables.syntax import *
 from variables.tags import *
 from variables.train import *
 
@@ -233,7 +233,7 @@ class QFunctionNet(Net):
         with Pool() as pool:
             docs = pool.map(QFunctionNet.indexes, methods)
             docs_baskets = batcher.throwing(docs, [INPUT_SIZE])
-            docs = docs_baskets[INPUT_SIZE][:100]
+            docs = docs_baskets[INPUT_SIZE]
             raw_samples = pool.starmap(QFunctionNet.build_samples_wrapper, ((doc, evaluate) for doc in docs))
             samples = [sample for samples in raw_samples for sample in samples]
             random.shuffle(samples)
@@ -332,7 +332,7 @@ class QFunctionNet(Net):
 
     @staticmethod
     @trace
-    def run(foo: str):
+    def start(foo: str):
         q_function_net = QFunctionNet()
         q_function_net.build()
         if foo == "train":

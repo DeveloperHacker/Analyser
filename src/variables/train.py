@@ -2,18 +2,9 @@ WORD2VEC_EPOCHS = 500
 CONTRACT_EPOCHS = 15
 ANALYSER_EPOCHS = 10
 Q_FUNCTION_EPOCHS = 10
-MÜNCHHAUSEN_EPOCHS = 200
+MÜNCHHAUSEN_PRETRAIN_EPOCHS = 30
+MÜNCHHAUSEN_TRAIN_EPOCHS = 50
 MÜNCHHAUSEN_RUNS = 2000
-
-
-def get_optimiser_selector():
-    i = 1
-    while True:
-        i += 0.1
-        for _ in range(int(3 * i)):
-            yield "diff", "adam"
-        for _ in range(int(10 * i)):
-            yield "q", "adadelta"
 
 LPR = {5: 70, 10: 20, 20: 5}
 MGS = 1_000_000

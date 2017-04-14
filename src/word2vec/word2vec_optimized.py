@@ -155,7 +155,7 @@ class Word2Vec(object):
                                                         min_count=opts.min_count,
                                                         subsample=opts.subsample)
         (opts.vocab_words, opts.vocab_counts,
-         opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch])
+         opts.words_per_epoch) = self._session.start([words, counts, words_per_epoch])
         opts.vocab_size = len(opts.vocab_words)
         print("Data file: ", opts.train_data)
         print("Vocab size: ", opts.vocab_size - 1, " + UNK")
@@ -206,7 +206,7 @@ class Word2Vec(object):
         self._epoch = current_epoch
         self._words = total_words_processed
         self.saver = tf.train.Saver()
-        tf.global_variables_initializer().run()
+        tf.global_variables_initializer().start()
 
     def __save_vocab(self):
         """Save the vocabulary to a file so the model can be reloaded."""
@@ -218,9 +218,9 @@ class Word2Vec(object):
                                      opts.vocab_counts[i]))
 
     def __train_thread_body(self):
-        initial_epoch, = self._session.run([self._epoch])
+        initial_epoch, = self._session.start([self._epoch])
         while True:
-            _, epoch = self._session.run([self._train, self._epoch])
+            _, epoch = self._session.start([self._train, self._epoch])
             if epoch != initial_epoch:
                 break
 
@@ -228,7 +228,7 @@ class Word2Vec(object):
         """Train the model."""
         opts = self._options
 
-        initial_epoch, initial_words = self._session.run([self._epoch, self._words])
+        initial_epoch, initial_words = self._session.start([self._epoch, self._words])
 
         workers = []
         for _ in range(opts.concurrent_steps):
@@ -239,7 +239,7 @@ class Word2Vec(object):
         last_words, last_time = initial_words, time.time()
         while True:
             time.sleep(5)  # Reports our progress once a while.
-            (epoch, step, words, lr) = self._session.run(
+            (epoch, step, words, lr) = self._session.start(
                 [self._epoch, self._global_step, self._words, self._lr])
             now = time.time()
             last_words, last_time, rate = words, now, (words - last_words) / (

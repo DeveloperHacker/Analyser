@@ -1,14 +1,14 @@
-from seq2seq.analyser import AnalyserNet
-from seq2seq.q_function import QFunctionNet
+from seq2seq.AnalyserNet import AnalyserNet
+from seq2seq.QFunctionNet import QFunctionNet
 from utils.wrapper import trace
-from variables.sintax import *
+from variables.syntax import *
 from variables.train import CONTRACT_EPOCHS
 
 
 def evaluate(inputs: dict, output: list):
     FUNCTION = 1
     ARGUMENT = 2
-    NOP = 3
+    END = 3
     losses = []
     output = np.transpose(output, [1, 0, 2])
     for line in output:
@@ -27,7 +27,7 @@ def evaluate(inputs: dict, output: list):
                     state = ARGUMENT
                 elif token == Tokens.END:
                     loss += 2.0 * (len(uids) - i)
-                    state = NOP
+                    state = END
                 else:
                     loss += 10.0
             elif state == ARGUMENT:
@@ -36,10 +36,10 @@ def evaluate(inputs: dict, output: list):
                 args -= 1
                 if args == 0:
                     state = FUNCTION
-            elif state == NOP:
-                if token != Tokens.NOP:
+            elif state == END:
+                if token != Tokens.END:
                     loss += 3.0
-        if state != NOP:
+        if state != END:
             loss += 7.0
         losses.append(loss)
     return losses
@@ -96,7 +96,7 @@ def test(analyser_net, q_function_net):
 
 
 @trace
-def run(foo: str):
+def start(foo: str):
     nets = build()
     if foo == "train":
         train(*nets)

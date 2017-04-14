@@ -60,7 +60,7 @@ class Tokens:
     IS = Function("is", 2)
     NOT_IS = Function("not is", 2)
     END = Delimiter("end")
-    NOP = Delimiter("nop")
+    # NOP = Delimiter("nop")
 
     @staticmethod
     def get(uid):

@@ -1,14 +1,14 @@
 from seq2seq import contracts
 from seq2seq.Net import *
-from seq2seq.q_function import QFunctionNet
+from seq2seq.QFunctionNet import QFunctionNet
 from seq2seq.seq2seq import *
 from utils import batcher, dumper
-from utils.Figure import Figure
+from live_plotter.Figure import Figure
 from utils.handlers import SIGINTException
 from utils.wrapper import *
 from variables.embeddings import *
 from variables.path import *
-from variables.sintax import NUM_TOKENS, Tokens
+from variables.syntax import NUM_TOKENS, Tokens
 from variables.tags import *
 from variables.train import *
 
@@ -235,7 +235,7 @@ class AnalyserNet(Net):
 
     @staticmethod
     @trace
-    def run(foo: str):
+    def start(foo: str):
         analyser_net = AnalyserNet()
         q_function_net = analyser_net.build()
         if foo == "pretrain":

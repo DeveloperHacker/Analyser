@@ -11,8 +11,10 @@ from variables.train import BLOCK_SIZE
 class Net(metaclass=ABCMeta):
     @staticmethod
     def get_part(data_set, ptr, step):
+        if ptr >= len(data_set):
+            ptr = 0
         left = ptr
-        right = min(len(data_set), ptr + step)
+        right = min(len(data_set), left + step)
         ptr = 0 if right == len(data_set) else ptr + step
         return data_set[left: right], ptr
 
@@ -45,20 +47,17 @@ class Net(metaclass=ABCMeta):
         self._saver = None
         self.name = name + "-net-"
         self.path = None
-
         self.train_set = None
         self.validation_set = None
         self.train_set_ptr = 0
         self.validation_set_ptr = 0
-
         self.optimisers = None
         self.optimisers_prt = 0
 
     def reset(self, session: tf.Session):
         self.path = None
         self._saver = None
-        self.mkdir()
-        session.run(tf.variables_initializer(self.get_variables()))
+        session.run(tf.global_variables_initializer())
 
     def mkdir(self):
         self.path = SEQ2SEQ + "/" + self.name + time.strftime("%d-%m-%Y-%H-%M-%S")
@@ -69,31 +68,23 @@ class Net(metaclass=ABCMeta):
             self.mkdir()
         self.get_saver().save(session, self.path + "/model-{}.ckpt".format(time.strftime("%d-%m-%Y-%H-%M-%S")))
 
-    def newest(self):
-        date = None
+    def newest(self, path: str, filtrator):
         names = []
-        for name in os.listdir(SEQ2SEQ):
-            if self.name in name:
-                names.append(name[len(self.name):])
-        max_date = None
-        for date in names:
-            splitted = [0.0] * 6
-            splitted[2], splitted[1], splitted[0], splitted[3], splitted[4], splitted[5] = date.split("-")
-            if max_date is None:
-                max_date = splitted
-            else:
-                for a, b in zip(splitted, max_date):
-                    if a > b:
-                        max_date = date
-                        break
-                    elif a < b:
-                        break
-        if date is None:
+        for name in os.listdir(path):
+            pathname = os.path.join(path, name)
+            if filtrator(pathname):
+                names.append(pathname)
+        if len(names) == 0:
             raise FileNotFoundError("Saves from {} net is not found".format(self.name))
-        return date
+        names.sort(key=os.path.getmtime, reverse=True)
+        last = names[0]
+        return last
 
-    def restore(self, session: tf.Session, date: str = None):
-        if date is None:
-            date = self.newest()
-        self.path = "{}/{}{}".format(SEQ2SEQ, self.name, date)
-        self.get_saver().restore(session, self.path + "/model.ckpt")
+    def restore(self, session: tf.Session):
+        filtrator = lambda path: os.path.isdir(path) and len(os.listdir(path)) > 0 and self.name in path
+        self.path = self.newest(SEQ2SEQ, filtrator)
+        import re
+        model_filtrator = lambda path: os.path.isfile(path) and re.match(r".+/model-.+\.ckpt\..+", path)
+        model = self.newest(self.path, model_filtrator)
+        model = ".".join(model.split(".")[:-1])
+        self.get_saver().restore(session, model)

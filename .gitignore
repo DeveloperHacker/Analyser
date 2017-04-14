@@ -89,5 +89,5 @@ ENV/
 *.sh
 *.cfg
 .idea/
-!/src/seq2seq/q_function.py
+!/seq2seq/q_function_net.py
 resources

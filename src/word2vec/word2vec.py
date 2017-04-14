@@ -47,7 +47,7 @@ def cluster():
 
 
 @trace
-def run(foo: str):
+def start(foo: str):
     if foo == "train":
         train()
     elif foo == "cluster":
