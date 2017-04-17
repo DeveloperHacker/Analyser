@@ -1,13 +1,13 @@
 import random
 from multiprocessing import Pool
 
-from seq2seq import contracts
+from seq2seq.Evaluator import Evaluator
 from utils import batcher, dumper
 from utils.wrapper import *
 from variables.embeddings import *
-from variables.path import *
-from variables.syntax import *
 from variables.tags import *
+from variables.paths import *
+from variables.syntax import *
 from variables.train import *
 
 
@@ -143,13 +143,12 @@ class DataSetBuilder:
 
     @staticmethod
     def build_samples_data_set(sample_builder, save_path: str, num_samples: int, genetic_cycles: int, noise_depth: int):
-        evaluate = contracts.evaluate
         methods = dumper.load(VEC_METHODS)
         with Pool() as pool:
             docs = pool.map(DataSetBuilder.indexes, methods)
             docs_baskets = batcher.throwing(docs, [INPUT_SIZE])
             docs = docs_baskets[INPUT_SIZE]
-            data = ((doc, evaluate, num_samples, genetic_cycles, noise_depth) for doc in docs)
+            data = ((doc, Evaluator.evaluate, num_samples, genetic_cycles, noise_depth) for doc in docs)
             raw_samples = pool.starmap(sample_builder, data)
             samples = [sample for samples in raw_samples for sample in samples]
             random.shuffle(samples)

@@ -3,7 +3,7 @@ from xml.etree.ElementTree import ElementTree
 
 from utils.method import *
 from utils.wrapper import trace
-from variables.path import METHODS
+from variables.paths import METHODS
 
 
 class Tags:

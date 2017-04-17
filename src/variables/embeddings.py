@@ -1,10 +1,10 @@
 import numpy as np
+import tensorflow as tf
 
 from utils import dumper as _dumper
-from variables import path as _path
+from variables import paths as _path
 from variables.tags import GO, PAD
 from variables.train import *
-import tensorflow as tf
 
 
 class Embeddings:
@@ -20,7 +20,6 @@ class Embeddings:
             Embeddings._instance[PAD] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
             Embeddings._instance = list(Embeddings._instance.items())
             Embeddings._instance.sort(key=lambda x: x[0])
-        # noinspection PyTypeChecker
         return Embeddings._instance
 
     @staticmethod
@@ -37,7 +36,6 @@ class Embeddings:
             Embeddings._emb2idx = {}
             for index, (word, embedding) in enumerate(Embeddings.instance()):
                 Embeddings._emb2idx[str(embedding)] = index
-        # noinspection PyTypeChecker
         return Embeddings._emb2idx
 
     @staticmethod
@@ -46,7 +44,6 @@ class Embeddings:
             Embeddings._word2idx = {}
             for index, (word, embedding) in enumerate(Embeddings.instance()):
                 Embeddings._word2idx[word] = index
-        # noinspection PyTypeChecker
         return Embeddings._word2idx
 
     @staticmethod

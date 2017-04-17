@@ -1,21 +1,22 @@
 from collections import namedtuple
 
-from seq2seq import contracts
+from live_plotter.Figure import Figure
+from seq2seq.munchhausen.MunchhausenOptimiser import MunchhausenTrainOptimiser, MunchhausenPreTrainOptimiser
+
 from seq2seq.DataSetBuilder import DataSetBuilder
-from seq2seq.MunchhausenFormater import MunchhausenFormatter
-from seq2seq.MunchhausenOptimiser import MunchhausenTrainOptimiser, MunchhausenPreTrainOptimiser
+from seq2seq.Evaluator import Evaluator
 from seq2seq.Net import *
+from seq2seq.munchhausen.MunchhausenFormater import MunchhausenFormatter
 from seq2seq.seq2seq import *
 from utils import dumper
-from live_plotter.Figure import Figure
 from utils.wrapper import *
 from variables.embeddings import *
-from variables.path import *
+from variables.paths import *
 from variables.syntax import *
 from variables.tags import *
 from variables.train import *
 
-PreTrainLosses = namedtuple("PreTrainLosses", ["loss", "q_diff", "sample_diff"])
+PreTrainLosses = namedtuple("PreTrainLosses", ["loss", "q", "q_diff", "sample_diff"])
 TrainLosses = namedtuple("TrainLosses", ["loss", "q", "q_diff", "evaluation"])
 
 
@@ -126,12 +127,12 @@ class MunchhausenNet(Net):
             sample_indexes = tf.transpose(tf.argmax(self.sample, 2), (1, 0))
             logits = tf.transpose(self.output_logits, (1, 0, 2))
             sample_diff_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=sample_indexes, logits=logits)
-            loss = tf.sqrt(q_diff_loss + q_loss)
-        self.pretrain_optimizer = MunchhausenPreTrainOptimiser(self, q_diff_loss, sample_diff_loss)
+            loss = tf.sqrt(tf.square(q_diff_loss) + tf.square(q_loss))
+        self.pretrain_optimizer = MunchhausenPreTrainOptimiser(self, q_loss, q_diff_loss, sample_diff_loss)
         self.train_optimizer = MunchhausenTrainOptimiser(self, q_loss, q_diff_loss)
         self.train_losses = (loss, q_loss, q_diff_loss, self.evaluation)
         self.train_losses = TrainLosses(*(tf.reduce_mean(loss) for loss in self.train_losses))
-        self.pretrain_losses = (loss, q_diff_loss, sample_diff_loss)
+        self.pretrain_losses = (loss, q_loss, q_diff_loss, sample_diff_loss)
         self.pretrain_losses = PreTrainLosses(*(tf.reduce_mean(loss) for loss in self.pretrain_losses))
 
     @staticmethod
@@ -183,7 +184,7 @@ class MunchhausenNet(Net):
                 fetches = (self.output,)
                 output, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
             else:
-                feed_dict[self.evaluation] = contracts.evaluate(indexes, output)
+                feed_dict[self.evaluation] = Evaluator.evaluate(indexes, output)
                 fetches = (self.output, self.train_losses)
                 if optimizers is not None:
                     fetches += optimizers
@@ -211,11 +212,11 @@ class MunchhausenNet(Net):
         worst_validation = (float("-inf"), "")
         worst_pretrain = (float("-inf"), "")
         worst_prevalidation = (float("-inf"), "")
-        for i in range(MÜNCHHAUSEN_RUNS):
+        for i in range(MUNCHHAUSEN_RUNS):
             self.load_data_set(MUNCHHAUSEN_PRETRAIN_SET)
-            pretrain_loss, prevalidation_loss = self.pretrain(MÜNCHHAUSEN_PRETRAIN_EPOCHS)
+            pretrain_loss, prevalidation_loss = self.pretrain(MUNCHHAUSEN_PRETRAIN_EPOCHS)
             self.load_data_set(MUNCHHAUSEN_TRAIN_SET)
-            train_loss, validation_loss = self.train(MÜNCHHAUSEN_TRAIN_EPOCHS, restore=True)
+            train_loss, validation_loss = self.train(MUNCHHAUSEN_TRAIN_EPOCHS, restore=True)
             if best_train[0] > train_loss: best_train = (train_loss, self.path)
             if best_validation[0] > validation_loss: best_validation = (validation_loss, self.path)
             if best_pretrain[0] > train_loss: best_pretrain = (pretrain_loss, self.path)
@@ -235,24 +236,22 @@ class MunchhausenNet(Net):
 
     @trace
     def pretrain(self, epochs: int):
-        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q-diff", "sample-diff"))
+        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q-loss", "q-diff", "sample-diff"), 13)
         Figure.ion()
         figure = Figure("pretrain")
-        train_loss_graph = figure.curve(3, 1, 1, mode="-ob")
-        validation_loss_graph = figure.curve(3, 1, 1, mode="-or")
-        train_q_diff_graph = figure.curve(3, 1, 2, mode="-ob")
-        validation_q_diff_graph = figure.curve(3, 1, 2, mode="-or")
-        train_sample_diff_graph = figure.curve(3, 1, 3, mode="-ob")
-        validation_sample_diff_graph = figure.curve(3, 1, 3, mode="-or")
-        figure.set_label(3, 1, 1, "loss")
-        figure.set_label(3, 1, 2, "q-diff")
-        figure.set_label(3, 1, 3, "sample-diff")
-        figure.set_x_label(3, 1, 1, "epoch")
-        figure.set_x_label(3, 1, 2, "epoch")
-        figure.set_x_label(3, 1, 3, "epoch")
-        figure.set_y_label(3, 1, 1, "loss")
-        figure.set_y_label(3, 1, 2, "loss")
-        figure.set_y_label(3, 1, 3, "loss")
+        train_loss_graph = figure.curve(4, 1, 1, mode="-ob")
+        validation_loss_graph = figure.curve(4, 1, 1, mode="-or")
+        train_q_loss_graph = figure.curve(4, 1, 2, mode="-ob")
+        validation_q_loss_graph = figure.curve(4, 1, 2, mode="-or")
+        train_q_diff_loss_graph = figure.curve(4, 1, 3, mode="-ob")
+        validation_q_diff_loss_graph = figure.curve(4, 1, 3, mode="-or")
+        train_sample_diff_loss_graph = figure.curve(4, 1, 4, mode="-ob")
+        validation_sample_diff_loss_graph = figure.curve(4, 1, 4, mode="-or")
+        figure.set_x_label(4, 1, 4, "epoch")
+        figure.set_y_label(4, 1, 1, "loss")
+        figure.set_y_label(4, 1, 2, "q-loss")
+        figure.set_y_label(4, 1, 3, "q-diff-loss")
+        figure.set_y_label(4, 1, 4, "sample-diff-loss")
         with tf.Session() as session, tf.device('/cpu:0'):
             self.reset(session)
             self.mkdir()
@@ -267,34 +266,31 @@ class MunchhausenNet(Net):
                 formatter.print(epoch, delay, *train_loss, *validation_loss)
                 train_loss_graph.append(epoch, train_loss.loss)
                 validation_loss_graph.append(epoch, validation_loss.loss)
-                train_q_diff_graph.append(epoch, train_loss.q_diff)
-                validation_q_diff_graph.append(epoch, validation_loss.q_diff)
-                train_sample_diff_graph.append(epoch, train_loss.sample_diff)
-                validation_sample_diff_graph.append(epoch, validation_loss.sample_diff)
+                train_q_loss_graph.append(epoch, train_loss.q)
+                validation_q_loss_graph.append(epoch, validation_loss.q)
+                train_q_diff_loss_graph.append(epoch, train_loss.q_diff)
+                validation_q_diff_loss_graph.append(epoch, validation_loss.q_diff)
+                train_sample_diff_loss_graph.append(epoch, train_loss.sample_diff)
+                validation_sample_diff_loss_graph.append(epoch, validation_loss.sample_diff)
                 figure.draw()
                 figure.save(self.path + "/pretrain.png")
         return train_loss.loss, validation_loss.loss
 
     @trace
     def train(self, epochs: int, restore: bool = False) -> (float, float):
-        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q", "q-diff", "eval"))
+        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q", "q-diff", "eval"), 13)
         Figure.ion()
         figure = Figure("train")
         train_loss_graph = figure.curve(3, 1, 1, mode="-ob")
         validation_loss_graph = figure.curve(3, 1, 1, mode="-or")
-        train_q_diff_graph = figure.curve(3, 1, 2, mode="-ob")
-        validation_q_diff_graph = figure.curve(3, 1, 2, mode="-or")
-        train_q_loss_graph = figure.curve(3, 1, 3, mode="-ob")
-        validation_q_loss_graph = figure.curve(3, 1, 3, mode="-or")
-        figure.set_label(3, 1, 1, "loss")
-        figure.set_label(3, 1, 2, "q-diff")
-        figure.set_label(3, 1, 3, "q-loss")
-        figure.set_x_label(3, 1, 1, "epoch")
-        figure.set_x_label(3, 1, 2, "epoch")
+        train_q_loss_graph = figure.curve(3, 1, 2, mode="-ob")
+        validation_q_loss_graph = figure.curve(3, 1, 2, mode="-or")
+        train_q_diff_loss_graph = figure.curve(3, 1, 3, mode="-ob")
+        validation_q_diff_loss_graph = figure.curve(3, 1, 3, mode="-or")
         figure.set_x_label(3, 1, 3, "epoch")
         figure.set_y_label(3, 1, 1, "loss")
-        figure.set_y_label(3, 1, 2, "loss")
-        figure.set_y_label(3, 1, 3, "loss")
+        figure.set_y_label(3, 1, 2, "q-loss")
+        figure.set_y_label(3, 1, 3, "q-diff-loss")
         with tf.Session() as session, tf.device('/cpu:0'):
             self.reset(session)
             if restore:
@@ -313,8 +309,8 @@ class MunchhausenNet(Net):
                 formatter.print(epoch, delay, *train_loss, *validation_loss)
                 train_loss_graph.append(epoch, train_loss.loss)
                 validation_loss_graph.append(epoch, validation_loss.loss)
-                train_q_diff_graph.append(epoch, train_loss.q_diff)
-                validation_q_diff_graph.append(epoch, validation_loss.q_diff)
+                train_q_diff_loss_graph.append(epoch, train_loss.q_diff)
+                validation_q_diff_loss_graph.append(epoch, validation_loss.q_diff)
                 train_q_loss_graph.append(epoch, train_loss.q)
                 validation_q_loss_graph.append(epoch, validation_loss.q)
                 figure.draw()
@@ -331,7 +327,7 @@ class MunchhausenNet(Net):
             maximum = [float("-inf"), ""]
             minimum = [float("inf"), ""]
             for losses, indexes, output in values:
-                evaluation = contracts.evaluate(indexes, output)
+                evaluation = Evaluator.evaluate(indexes, output)
                 output = np.transpose(output, axes=(1, 0, 2))
                 for _output, _evaluation in zip(output, evaluation):
                     contract = " ".join((Tokens.get(np.argmax(soft)).name for soft in _output))
@@ -353,8 +349,10 @@ class MunchhausenNet(Net):
         if foo == "run":
             münchhausen_net.run()
         elif foo == "train":
-            münchhausen_net.train(MÜNCHHAUSEN_TRAIN_EPOCHS)
+            münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS)
         elif foo == "restore":
-            münchhausen_net.train(MÜNCHHAUSEN_TRAIN_EPOCHS, True)
+            münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS, True)
         elif foo == "test":
             münchhausen_net.test()
+        elif foo == "data_set":
+            MunchhausenNet.build_data_set()

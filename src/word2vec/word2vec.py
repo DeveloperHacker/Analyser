@@ -3,7 +3,7 @@ import tensorflow as tf
 
 from utils import batcher, dumper, filter, generator, printer, unpacker
 from utils.wrapper import trace
-from variables.path import *
+from variables.paths import *
 from variables.train import *
 from word2vec import word2vec_optimized as word2vec
 

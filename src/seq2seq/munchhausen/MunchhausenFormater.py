@@ -2,7 +2,7 @@ import logging
 
 
 class MunchhausenFormatter:
-    def __init__(self, tracers: list, losses: list, row_size: int = 11, column_size: int = 10):
+    def __init__(self, tracers: list, losses: list, row_size: int, column_size: int = 10):
         self.row_size = row_size
         self.column_size = column_size
         f1 = "{{:^{size:d}s}}"

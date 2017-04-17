@@ -4,7 +4,7 @@ from abc import ABCMeta
 
 import tensorflow as tf
 
-from variables.path import SEQ2SEQ
+from variables.paths import SEQ2SEQ
 from variables.train import BLOCK_SIZE
 
 
