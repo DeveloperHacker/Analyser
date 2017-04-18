@@ -56,8 +56,8 @@ class MunchhausenPreTrainOptimiser(MunchhausenOptimiser):
         self.sample_diff_optimizer = None  # type: tf_Optimizer
         with vs.variable_scope("pretrain-optimizer"):
             optimizer = tf.train.AdadeltaOptimizer()
-            q = optimizer.minimize(q_loss, var_list=munchhausen_net.get_analyser_variables())
+            # q = optimizer.minimize(q_loss, var_list=munchhausen_net.get_analyser_variables())
             q_diff = optimizer.minimize(q_diff_loss, var_list=munchhausen_net.get_q_function_variables())
             sample_diff = optimizer.minimize(sample_diff_loss, var_list=munchhausen_net.get_analyser_variables())
-            self.q_diff_optimizer = Optimizer("adadelta", "diff", q_diff, sample_diff, q)
+            self.q_diff_optimizer = Optimizer("adadelta", "diff", q_diff, sample_diff)
         super().__init__(self.q_diff_optimizer)

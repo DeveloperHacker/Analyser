@@ -10,11 +10,9 @@ class Evaluator:
         ARGUMENT = 2
         END = 3
         losses = []
-        output = np.transpose(output, [1, 0, 2])
-        for line in output:
+        for indexes in output:
             args = 0
             loss = 0.0
-            indexes = np.argmax(line, 1)
             state = FUNCTION
             tokens = []
             for i in range(len(indexes)):
@@ -54,6 +52,9 @@ class Evaluator:
 
     @staticmethod
     def evaluate(inputs: dict, output: list) -> np.ndarray:
+        inputs = {label: np.transpose(inp, [1, 0]) for label, inp in inputs.items()}
+        output = np.transpose(output, [1, 0, 2])
+        output = np.argmax(output, 2)
         syntax_evaluation = Evaluator.evaluate_syntax(output)
         correlation = Evaluator.evaluate_correlation(inputs, output)
         causation = Evaluator.evaluate_causation(inputs, output)
