@@ -1,12 +1,12 @@
 from collections import namedtuple
 
-from live_plotter.Figure import Figure
-from seq2seq.munchhausen.MunchhausenOptimiser import MunchhausenTrainOptimiser, MunchhausenPreTrainOptimiser
+from live_plotter.proxy.ProxyFigure import ProxyFigure
 
 from seq2seq.DataSetBuilder import DataSetBuilder
 from seq2seq.Evaluator import Evaluator
 from seq2seq.Net import *
 from seq2seq.munchhausen.MunchhausenFormater import MunchhausenFormatter
+from seq2seq.munchhausen.MunchhausenOptimiser import MunchhausenTrainOptimiser, MunchhausenPreTrainOptimiser
 from seq2seq.seq2seq import *
 from utils import dumper
 from utils.wrapper import *
@@ -27,7 +27,7 @@ class MunchhausenNet(Net):
         self.indexes = None  # type: list
         self.inputs = None  # type: list
         self.inputs_sizes = None  # type: list
-        self.output_logits = None  # type: list
+        self.logits = None  # type: list
         self.output = None  # type: list
         self.evaluation = None  # type: tf.Tensor
         self.q = None  # type: tf.Tensor
@@ -82,38 +82,44 @@ class MunchhausenNet(Net):
                     inputs_states = []
                     for label in PARTS:
                         with vs.variable_scope(label):
-                            fw, bw = build_encoder(inputs[label], INPUT_STATE_SIZE, inputs_sizes[label])
-                            inputs_states.append(tf.concat(axis=1, values=[fw[0], bw[-1]]))
-                            inputs_states.append(tf.concat(axis=1, values=[fw[-1], bw[0]]))
+                            fw, bw = build_encoder(inputs[label], STATE_SIZE, inputs_sizes[label])
+                            states = [tf.concat(axis=1, values=[fw[i], bw[-(i + 1)]]) for i in range(INPUT_SIZE)]
+                            inputs_states.extend(states)
+                    num_inputs_states = len(inputs_states)
                     inputs_states = tf.transpose(tf.stack(inputs_states), [1, 0, 2])
                 with vs.variable_scope("decoder"):
-                    emb_size = NUM_TOKENS
-                    goes = tf.zeros([BATCH_SIZE, emb_size])
+                    goes = tf.zeros([BATCH_SIZE, NUM_TOKENS])
                     decoder_inputs = [goes] * OUTPUT_SIZE
-                    state_size = INPUT_STATE_SIZE
                     initial = INITIAL_STATE
-                    logits, _ = build_decoder(decoder_inputs, inputs_states, state_size, initial, emb_size, loop=True)
+                    logits, _ = build_decoder(decoder_inputs, inputs_states, STATE_SIZE, initial, NUM_TOKENS, loop=True)
                 with vs.variable_scope("softmax"):
                     output = tf.unstack(tf.nn.softmax(logits))
                 self.analyser_scope = vs.get_variable_scope().name
             with vs.variable_scope("q-function"):
-                with vs.variable_scope("encoder"):
-                    fw, bw = build_encoder(tf.unstack(logits), OUTPUT_STATE_SIZE)
-                    states = [tf.concat(axis=1, values=[fw[i], bw[-(i + 1)]]) for i in range(OUTPUT_SIZE)]
-                with vs.variable_scope("decoder"):
-                    Q, _ = build_decoder(states, inputs_states, INPUT_STATE_SIZE, INITIAL_STATE, 1)
-                    Q = tf.transpose(tf.reshape(tf.nn.relu(tf.stack(Q)), [OUTPUT_SIZE, BATCH_SIZE]), [1, 0])
-                with vs.variable_scope("sigmoid"):
-                    W_shape = [OUTPUT_STATE_SIZE * 2, 1]
+                with vs.variable_scope("doc-linear"):
+                    W_shape = [num_inputs_states * STATE_SIZE * 2, EQUATION_SIZE]
+                    B_shape = [EQUATION_SIZE]
+                    W = tf.Variable(initial_value=tf.truncated_normal(W_shape, dtype=tf.float32), name="weights")
+                    B = tf.Variable(initial_value=tf.truncated_normal(B_shape, dtype=tf.float32), name="biases")
+                    matrix = tf.reshape(inputs_states, [BATCH_SIZE, num_inputs_states * STATE_SIZE * 2])
+                    doc_embedding = tf.sigmoid(tf.matmul(matrix, W) + B)
+                with vs.variable_scope("contract-linear"):
+                    W_shape = [OUTPUT_SIZE * NUM_TOKENS, EQUATION_SIZE]
+                    B_shape = [EQUATION_SIZE]
+                    W = tf.Variable(initial_value=tf.truncated_normal(W_shape, dtype=tf.float32), name="weights")
+                    B = tf.Variable(initial_value=tf.truncated_normal(B_shape, dtype=tf.float32), name="biases")
+                    logits = tf.transpose(logits, (1, 0, 2))
+                    matrix = tf.reshape(logits, [BATCH_SIZE, OUTPUT_SIZE * NUM_TOKENS])
+                    contract_embedding = tf.sigmoid(tf.matmul(matrix, W) + B)
+                with vs.variable_scope("evaluate"):
+                    W_shape = [EQUATION_SIZE, 1]
                     B_shape = [1]
                     W = tf.Variable(initial_value=tf.truncated_normal(W_shape, dtype=tf.float32), name="weights")
                     B = tf.Variable(initial_value=tf.truncated_normal(B_shape, dtype=tf.float32), name="biases")
-                    states = tf.reshape(tf.stack(states), [BATCH_SIZE * OUTPUT_SIZE, OUTPUT_STATE_SIZE * 2])
-                    I = tf.sigmoid(tf.reshape(tf.matmul(states, W) + B, [BATCH_SIZE, OUTPUT_SIZE]))
-                    q = tf.reduce_sum(Q * I, axis=1)
+                    q = tf.nn.relu(tf.matmul(doc_embedding - contract_embedding, W) + B)
                 self.q_function_scope = vs.get_variable_scope().name
             scope = vs.get_variable_scope().name
-        self.output_logits = logits
+        self.logits = logits
         self.output = output
         self.q = q
         self.scope = scope
@@ -125,10 +131,10 @@ class MunchhausenNet(Net):
             q_diff_loss = tf.abs(self.diff)
             q_loss = self.q
             sample_indexes = tf.transpose(tf.argmax(self.sample, 2), (1, 0))
-            logits = tf.transpose(self.output_logits, (1, 0, 2))
+            logits = tf.transpose(self.logits, (1, 0, 2))
             sample_diff_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=sample_indexes, logits=logits)
             loss = tf.sqrt(tf.square(q_diff_loss) + tf.square(q_loss))
-        self.pretrain_optimizer = MunchhausenPreTrainOptimiser(self, q_loss, q_diff_loss, sample_diff_loss)
+        self.pretrain_optimizer = MunchhausenPreTrainOptimiser(self, q_diff_loss, sample_diff_loss)
         self.train_optimizer = MunchhausenTrainOptimiser(self, q_loss, q_diff_loss)
         self.train_losses = (loss, q_loss, q_diff_loss, self.evaluation)
         self.train_losses = TrainLosses(*(tf.reduce_mean(loss) for loss in self.train_losses))
@@ -138,7 +144,7 @@ class MunchhausenNet(Net):
     @staticmethod
     @trace
     def build_data_set():
-        DataSetBuilder.build_best_data_set(MUNCHHAUSEN_PRETRAIN_SET, 20, 20, 3)
+        DataSetBuilder.build_best_data_set(MUNCHHAUSEN_PRETRAIN_SET, 10 * 3, 3, 20, 3)
         DataSetBuilder.build_vectorized_methods_data_set(MUNCHHAUSEN_TRAIN_SET)
 
     @trace
@@ -154,7 +160,7 @@ class MunchhausenNet(Net):
         self.build_fetches()
         self.load_data_set(MUNCHHAUSEN_TRAIN_SET)
 
-    def pretrain_epoch(self, session, data_set, optimizers: list = None):
+    def pretrain_epoch(self, session, data_set, optimize: bool = False):
         losses = []
         values = []
         for i, (indexes, inputs_sizes, sample, evaluation) in enumerate(data_set):
@@ -162,17 +168,21 @@ class MunchhausenNet(Net):
             for label in PARTS:
                 feed_dict.update(zip(self.indexes[label], indexes[label]))
                 feed_dict[self.inputs_sizes[label]] = inputs_sizes[label]
-            feed_dict[self.evaluation] = evaluation
-            feed_dict.update(zip(self.sample, sample))
-            fetches = (self.output, self.pretrain_losses)
-            if optimizers is not None:
-                fetches += optimizers
-            output, local_losses, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
-            losses.append(local_losses)
-            values.append((local_losses, indexes, output))
+            if i == 0:
+                fetches = (self.output,)
+                output, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
+            else:
+                feed_dict[self.evaluation] = Evaluator.evaluate_batch(indexes, output)
+                feed_dict.update(zip(self.sample, sample))
+                fetches = (self.output, self.train_losses)
+                if optimize:
+                    fetches += self.pretrain_optimizer.get_optimizers()
+                output, local_losses, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
+                losses.append(local_losses)
+                values.append((local_losses, indexes, output))
         return PreTrainLosses(*np.mean(losses, axis=0)), values
 
-    def train_epoch(self, session, data_set, optimizers: list = None):
+    def train_epoch(self, session, data_set, optimize: bool = False):
         losses = []
         values = []
         for i, (indexes, inputs_sizes) in enumerate(data_set):
@@ -184,11 +194,13 @@ class MunchhausenNet(Net):
                 fetches = (self.output,)
                 output, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
             else:
-                feed_dict[self.evaluation] = Evaluator.evaluate(indexes, output)
+                feed_dict[self.evaluation] = Evaluator.evaluate_batch(indexes, output)
                 fetches = (self.output, self.train_losses)
-                if optimizers is not None:
-                    fetches += optimizers
+                if optimize:
+                    fetches += self.train_optimizer.get_optimizers()
                 output, local_losses, *_ = session.run(fetches=fetches, feed_dict=feed_dict)
+                if optimize:
+                    self.train_optimizer.update(local_losses.q, local_losses.q_diff, local_losses.evaluation)
                 losses.append(local_losses)
                 values.append((local_losses, indexes, output))
         return TrainLosses(*np.mean(losses, axis=0)), values
@@ -236,9 +248,14 @@ class MunchhausenNet(Net):
 
     @trace
     def pretrain(self, epochs: int):
-        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q-loss", "q-diff", "sample-diff"), 13)
-        Figure.ion()
-        figure = Figure("pretrain")
+        formatter = MunchhausenFormatter(
+            heads=("epoch", "time", *(("loss", "q-loss", "q-diff", "sample-diff") * 2)),
+            formats=("d",) + (".4f",) * 9,
+            sizes=(13,) * 10,
+            rows=range(10),
+            height=10
+        )
+        figure = ProxyFigure("pretrain")
         train_loss_graph = figure.curve(4, 1, 1, mode="-ob")
         validation_loss_graph = figure.curve(4, 1, 1, mode="-or")
         train_q_loss_graph = figure.curve(4, 1, 2, mode="-ob")
@@ -257,9 +274,8 @@ class MunchhausenNet(Net):
             self.mkdir()
             formatter.run(self.path)
             for epoch in range(epochs):
-                optimizers = self.pretrain_optimizer.get_tf_optimizers()
                 clock = time.time()
-                train_loss, *_ = self.pretrain_epoch(session, self.get_train_set(), optimizers)
+                train_loss, *_ = self.pretrain_epoch(session, self.get_train_set(), True)
                 validation_loss, *_ = self.pretrain_epoch(session, self.get_validation_set())
                 delay = time.time() - clock
                 self.save(session)
@@ -278,19 +294,27 @@ class MunchhausenNet(Net):
 
     @trace
     def train(self, epochs: int, restore: bool = False) -> (float, float):
-        formatter = MunchhausenFormatter(("epoch", "time"), ("loss", "q", "q-diff", "eval"), 13)
-        Figure.ion()
-        figure = Figure("train")
-        train_loss_graph = figure.curve(3, 1, 1, mode="-ob")
-        validation_loss_graph = figure.curve(3, 1, 1, mode="-or")
-        train_q_loss_graph = figure.curve(3, 1, 2, mode="-ob")
-        validation_q_loss_graph = figure.curve(3, 1, 2, mode="-or")
-        train_q_diff_loss_graph = figure.curve(3, 1, 3, mode="-ob")
-        validation_q_diff_loss_graph = figure.curve(3, 1, 3, mode="-or")
-        figure.set_x_label(3, 1, 3, "epoch")
-        figure.set_y_label(3, 1, 1, "loss")
-        figure.set_y_label(3, 1, 2, "q-loss")
-        figure.set_y_label(3, 1, 3, "q-diff-loss")
+        formatter = MunchhausenFormatter(
+            heads=("epoch", "time", *(("loss", "q", "q-diff", "eval") * 2)),
+            formats=("d",) + (".4f",) * 9,
+            sizes=(13,) * 10,
+            rows=range(10),
+            height=10
+        )
+        figure = ProxyFigure("train")
+        train_loss_graph = figure.curve(4, 1, 1, mode="-ob")
+        validation_loss_graph = figure.curve(4, 1, 1, mode="-or")
+        train_q_loss_graph = figure.curve(4, 1, 2, mode="-ob")
+        validation_q_loss_graph = figure.curve(4, 1, 2, mode="-or")
+        train_q_diff_loss_graph = figure.curve(4, 1, 3, mode="-ob")
+        validation_q_diff_loss_graph = figure.curve(4, 1, 3, mode="-or")
+        train_evaluation_loss_graph = figure.curve(4, 1, 4, mode="-ob")
+        validation_evaluation_loss_graph = figure.curve(4, 1, 4, mode="-or")
+        figure.set_x_label(4, 1, 4, "epoch")
+        figure.set_y_label(4, 1, 1, "loss")
+        figure.set_y_label(4, 1, 2, "q-loss")
+        figure.set_y_label(4, 1, 3, "q-diff-loss")
+        figure.set_y_label(4, 1, 4, "evaluation-loss")
         with tf.Session() as session, tf.device('/cpu:0'):
             self.reset(session)
             if restore:
@@ -299,12 +323,10 @@ class MunchhausenNet(Net):
                 self.mkdir()
             formatter.run(self.path)
             for epoch in range(epochs):
-                optimizers = self.train_optimizer.get_tf_optimizers()
                 clock = time.time()
-                train_loss, *_ = self.train_epoch(session, self.get_train_set(), optimizers)
+                train_loss, *_ = self.train_epoch(session, self.get_train_set(), True)
                 validation_loss, *_ = self.train_epoch(session, self.get_validation_set())
                 delay = time.time() - clock
-                self.train_optimizer.update(train_loss.q_diff)
                 self.save(session)
                 formatter.print(epoch, delay, *train_loss, *validation_loss)
                 train_loss_graph.append(epoch, train_loss.loss)
@@ -313,6 +335,8 @@ class MunchhausenNet(Net):
                 validation_q_diff_loss_graph.append(epoch, validation_loss.q_diff)
                 train_q_loss_graph.append(epoch, train_loss.q)
                 validation_q_loss_graph.append(epoch, validation_loss.q)
+                train_evaluation_loss_graph.append(epoch, train_loss.evaluation)
+                validation_evaluation_loss_graph.append(epoch, validation_loss.evaluation)
                 figure.draw()
                 figure.save(self.path + "/train.png")
         return train_loss.loss, validation_loss.loss
@@ -327,7 +351,7 @@ class MunchhausenNet(Net):
             maximum = [float("-inf"), ""]
             minimum = [float("inf"), ""]
             for losses, indexes, output in values:
-                evaluation = Evaluator.evaluate(indexes, output)
+                evaluation = Evaluator.evaluate_batch(indexes, output)
                 output = np.transpose(output, axes=(1, 0, 2))
                 for _output, _evaluation in zip(output, evaluation):
                     contract = " ".join((Tokens.get(np.argmax(soft)).name for soft in _output))
@@ -344,15 +368,17 @@ class MunchhausenNet(Net):
     @staticmethod
     @trace
     def start(foo: str):
-        münchhausen_net = MunchhausenNet()
-        münchhausen_net.build()
-        if foo == "run":
-            münchhausen_net.run()
-        elif foo == "train":
-            münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS)
-        elif foo == "restore":
-            münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS, True)
-        elif foo == "test":
-            münchhausen_net.test()
-        elif foo == "data_set":
+        if foo == "data_set":
             MunchhausenNet.build_data_set()
+        else:
+            münchhausen_net = MunchhausenNet()
+            münchhausen_net.build()
+            if foo == "run":
+                münchhausen_net.run()
+            elif foo == "train":
+                münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS)
+            elif foo == "restore":
+                münchhausen_net.train(MUNCHHAUSEN_TRAIN_EPOCHS, True)
+            elif foo == "test":
+                münchhausen_net.test()
+            ProxyFigure.destroy()

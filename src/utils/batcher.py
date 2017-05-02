@@ -47,8 +47,9 @@ def firstNMax(clusters: list, n: int):
 
 
 def chunks(line: list, block_size: int):
-    for i in range(0, len(line), block_size):
-        yield line[i:i + block_size]
+    for i in range(len(line) // block_size):
+        index = i * block_size
+        yield line[index:index + block_size]
 
 
 def hist(data: list, basket_sizes: list, key=None) -> dict:

@@ -76,4 +76,4 @@ class Embeddings:
         return Embeddings.get_store(key)[1]
 
 
-INITIAL_STATE = tf.zeros([BATCH_SIZE, INPUT_STATE_SIZE], dtype=np.float32)
+INITIAL_STATE = tf.zeros([BATCH_SIZE, STATE_SIZE], dtype=np.float32)

@@ -5,9 +5,9 @@ from seq2seq.Evaluator import Evaluator
 from utils import batcher, dumper
 from utils.wrapper import *
 from variables.embeddings import *
-from variables.tags import *
 from variables.paths import *
 from variables.syntax import *
+from variables.tags import *
 from variables.train import *
 
 
@@ -42,50 +42,45 @@ class DataSetBuilder:
         return samples[:quantity]
 
     @staticmethod
-    def build_samples(doc, evaluate, filtrator, num_samples: int, num_genetic_cycles: int, noise_depth: int):
-        ARGUMENT = 1
-        FUNCTION = 2
-
+    def build_samples(
+            doc, evaluate, filtrator, num_samples: int, num_functions: int, num_genetic_cycles: int,
+            noise_depth: int
+    ):
         indexes = {}
         inputs_sizes = {}
         for label, embeddings in doc:
-            indexes[label] = []
             inputs_sizes[label] = []
-            for _ in range(INPUT_SIZE):
-                indexes[label].append([])
-            line = embeddings + [Embeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(embeddings))]
+            indexes[label] = embeddings + [Embeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(embeddings))]
             inputs_sizes[label].append(len(embeddings))
-            for i, embedding in enumerate(line):
-                indexes[label][i].append(embedding)
-        samples = []
-        for _ in range(num_samples):
-            sample = []
-            state = FUNCTION
-            expected = OUTPUT_SIZE
-            arguments = None
-            num_functions = random.randrange(expected // 2)
-            while True:
-                if state == FUNCTION:
-                    i = random.randrange(len(Functions))
-                    arguments = Functions[i].arguments
-                    expected -= arguments + 1
-                    if expected <= 0 or num_functions == 0:
-                        sample.extend([Tokens.END.embedding] * (arguments + expected + 1))
+        samples = [[] for _ in range(num_functions)]
+        for _ in range(num_samples // num_functions):
+            for functions in range(num_functions):
+                sample = []
+                expected_functions = functions + 1
+                expected = OUTPUT_SIZE
+                while True:
+                    func = Functions[random.randrange(len(Functions))]
+                    expected -= func.arguments + 1
+                    if expected <= 0 or expected_functions == 0:
+                        sample.extend([Tokens.END.embedding] * (func.arguments + 1 + expected))
                         break
-                    sample.append(Functions[i].embedding)
-                    num_functions -= 1
-                    state = ARGUMENT
-                elif state == ARGUMENT:
-                    i = random.randrange(len(Constants))
-                    constant = Constants[i]
-                    sample.append(constant.embedding)
-                    arguments -= 1
-                    if arguments == 0:
-                        state = FUNCTION
-            samples.append((sample, evaluate(indexes, np.expand_dims(sample, axis=1))[0]))
-        random.shuffle(samples)
-        samples = DataSetBuilder.noise_samples(indexes, samples, evaluate, filtrator, num_genetic_cycles, noise_depth)
-        return (indexes, inputs_sizes), samples
+                    else:
+                        expected_functions -= 1
+                        sample.append(func.embedding)
+                        for _ in range(func.arguments):
+                            constant = Constants[random.randrange(len(Constants))]
+                            sample.append(constant.embedding)
+                sample_pair = (sample, evaluate(indexes, sample))
+                samples[functions].append(sample_pair)
+        for expected_functions in range(num_functions):
+            current_samples = samples[expected_functions]
+            random.shuffle(current_samples)
+            args = (indexes, current_samples, evaluate, filtrator, num_genetic_cycles, noise_depth)
+            samples[expected_functions] = DataSetBuilder.noise_samples(*args)
+        result = set()
+        for _samples in samples:
+            result.update(((tuple(tuple(one_hot) for one_hot in sample), evaluate) for sample, evaluate in _samples))
+        return (indexes, inputs_sizes), list(result)
 
     @staticmethod
     def noise_samples(inputs, samples, evaluate, filtrator, num_genetic_cycles: int, noise_depth: int):
@@ -98,20 +93,21 @@ class DataSetBuilder:
                 for index in indexes:
                     n = random.randrange(NUM_TOKENS)
                     sample[index] = Tokens.get(n).embedding
-                noised_samples.append((sample, evaluate(inputs, np.expand_dims(sample, axis=1))[0]))
+                noised_samples.append((sample, evaluate(inputs, sample)))
             noised_samples = filtrator(noised_samples, num_samples, lambda x: x[1])
         return noised_samples
 
     @staticmethod
-    def build_most_different_samples(doc, evaluate, num_samples: int, genetic_cycles: int, noise_depth: int):
+    def build_most_different_samples(doc, evaluate, num_samples: int, num_functions: int, genetic_cycles: int,
+                                     noise_depth: int):
         inputs, samples = DataSetBuilder.build_samples(doc, evaluate, DataSetBuilder.most_different,
-                                                       num_samples, genetic_cycles, noise_depth)
+                                                       num_samples, num_functions, genetic_cycles, noise_depth)
         return [(inputs, sample) for sample in samples]
 
     @staticmethod
-    def build_best_samples(doc, evaluate, num_samples: int, genetic_cycles: int, noise_depth: int):
-        inputs, samples = DataSetBuilder.build_samples(doc, evaluate, DataSetBuilder.most_different,
-                                                       num_samples, genetic_cycles, noise_depth)
+    def build_best_samples(doc, evaluate, num_samples: int, num_functions: int, genetic_cycles: int, noise_depth: int):
+        inputs, samples = DataSetBuilder.build_samples(doc, evaluate, DataSetBuilder.best,
+                                                       num_samples, num_functions, genetic_cycles, noise_depth)
         return [(inputs, sample) for sample in samples]
 
     @staticmethod
@@ -123,13 +119,11 @@ class DataSetBuilder:
         for (inp, inp_sizes), (sample, evaluation) in batch:
             for label in PARTS:
                 indexes[label].append(inp[label])
-                inputs_sizes[label].append(inp_sizes[label])
+                inputs_sizes[label].extend(inp_sizes[label])
             samples.append(sample)
             evaluations.append(evaluation)
         for label in PARTS:
-            indexes[label] = np.transpose(np.asarray(indexes[label]), axes=(1, 0, 2))
-            indexes[label] = np.squeeze(indexes[label], axis=(2,))
-            inputs_sizes[label] = np.squeeze(np.asarray(inputs_sizes[label]), axis=(1,))
+            indexes[label] = np.transpose(indexes[label], axes=(1, 0))
         samples = np.transpose(np.asarray(samples), axes=(1, 0, 2))
         return indexes, inputs_sizes, samples, evaluations
 
@@ -142,13 +136,14 @@ class DataSetBuilder:
         return doc
 
     @staticmethod
-    def build_samples_data_set(sample_builder, save_path: str, num_samples: int, genetic_cycles: int, noise_depth: int):
+    def build_samples_data_set(sample_builder, save_path: str, num_samples: int, num_functions: int,
+                               genetic_cycles: int, noise_depth: int):
         methods = dumper.load(VEC_METHODS)
         with Pool() as pool:
             docs = pool.map(DataSetBuilder.indexes, methods)
             docs_baskets = batcher.throwing(docs, [INPUT_SIZE])
             docs = docs_baskets[INPUT_SIZE]
-            data = ((doc, Evaluator.evaluate, num_samples, genetic_cycles, noise_depth) for doc in docs)
+            data = ((doc, Evaluator.evaluate, num_samples, num_functions, genetic_cycles, noise_depth) for doc in docs)
             raw_samples = pool.starmap(sample_builder, data)
             samples = [sample for samples in raw_samples for sample in samples]
             random.shuffle(samples)
@@ -158,15 +153,17 @@ class DataSetBuilder:
 
     @staticmethod
     @trace
-    def build_most_different_data_set(save_path: str, num_samples: int, genetic_cycles: int, noise_depth: int):
+    def build_most_different_data_set(save_path: str, num_samples: int, num_functions: int, genetic_cycles: int,
+                                      noise_depth: int):
         DataSetBuilder.build_samples_data_set(DataSetBuilder.build_most_different_samples, save_path,
-                                              num_samples, genetic_cycles, noise_depth)
+                                              num_samples, num_functions, genetic_cycles, noise_depth)
 
     @staticmethod
     @trace
-    def build_best_data_set(save_path: str, num_samples: int, genetic_cycles: int, noise_depth: int):
-        DataSetBuilder.build_samples_data_set(DataSetBuilder.build_best_samples, save_path,
-                                              num_samples, genetic_cycles, noise_depth)
+    def build_best_data_set(save_path: str, num_samples: int, num_functions: int, genetic_cycles: int,
+                            noise_depth: int):
+        DataSetBuilder.build_samples_data_set(DataSetBuilder.build_best_samples, save_path, num_samples, num_functions,
+                                              genetic_cycles, noise_depth)
 
     @staticmethod
     def indexes(method):

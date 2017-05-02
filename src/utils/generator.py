@@ -36,12 +36,9 @@ def separate(tar_label, tar_value, data, divider, threshold) -> StateParam:
 
 def KNeighborsClusterisator(data: dict):
     def instance(threshold: float):
-        print("[XNeighbors]")
         pool = Pool()
         state = [(label, target, data) for label, target in data.items()]
-        print("[MAXIMUM]")
         divider = np.max(pool.starmap(maximum, state))
-        print("[SEPARATE]")
         state = pool.starmap(separate, [(*pair, divider, threshold) for pair in state])
         return state
 
