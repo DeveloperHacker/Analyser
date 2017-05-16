@@ -2,9 +2,9 @@ import argparse
 import logging
 import sys
 
-import word2vec.word2vec as word2vec
 from seq2seq.munchhausen.MunchhausenNet import MunchhausenNet
-from variables.paths import *
+from variables.paths import WORD2VEC_LOG, MUNCHHAUSEN_LOG
+from word2vec.word2vec_optimized import word2vec
 
 
 def main(args):

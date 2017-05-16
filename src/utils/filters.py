@@ -1,8 +1,6 @@
 import re
-from multiprocessing import Pool
 
 from utils.method import JavaDoc, Method
-from utils.wrapper import trace
 from variables.tags import *
 
 
@@ -114,7 +112,7 @@ def unpackStableReduction(string: str) -> str:
 
 
 def expandWordsAndSymbols(string: str) -> str:
-    return re.sub(r"(\{})".format("|\\".join(PUNCTUATION)), r" \1 ", string)
+    return re.sub(r"({})".format("|\\".join(PUNCTUATION)), r" \1 ", string)
 
 
 def filterLongSpaces(string: str) -> str:
@@ -156,40 +154,15 @@ def applyFiltersForString(string: str, params: list) -> str:
     return string
 
 
-def join(javaDoc: JavaDoc) -> list:
-    joined = [
-        ("head", javaDoc.head),
-        ("param", (" %s " % NEXT).join(javaDoc.params)),
-        ("variable", (" %s " % NEXT).join(javaDoc.variables)),
-        ("return", (" %s " % NEXT).join(javaDoc.results)),
-        # ("see", (" %s " % next).join(javaDoc.sees)),
-        # ("throw", (" %s " % next).join(javaDoc.throws))
-    ]
-    return joined
-
-
 def applyFiltersForMethod(method: Method) -> Method:
     params = [param.name for param in method.description.params]
-    javaDoc = method.javaDoc  # type: JavaDoc
-    javaDoc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
-                         i, name in enumerate(params)]
-    javaDoc.head = applyFiltersForString(javaDoc.head, params)
-    javaDoc.params = [applyFiltersForString(param, params) for param in javaDoc.params]
-    javaDoc.results = [applyFiltersForString(result, params) for result in javaDoc.results]
-    javaDoc.throws = [applyFiltersForString(throw, params) for throw in javaDoc.throws]
-    javaDoc.sees = [applyFiltersForString(see, params) for see in javaDoc.sees]
-    method.javaDoc = javaDoc
+    java_doc = method.java_doc  # type: JavaDoc
+    java_doc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
+                          i, name in enumerate(params)]
+    java_doc.head = applyFiltersForString(java_doc.head, params)
+    java_doc.params = [applyFiltersForString(param, params) for param in java_doc.params]
+    java_doc.results = [applyFiltersForString(result, params) for result in java_doc.results]
+    java_doc.throws = [applyFiltersForString(throw, params) for throw in java_doc.throws]
+    java_doc.sees = [applyFiltersForString(see, params) for see in java_doc.sees]
+    method.java_doc = java_doc
     return method
-
-
-def isNotEmpty(method: Method) -> bool:
-    return not method.javaDoc.empty()
-
-
-@trace
-def applyFiltersForMethods(methods: list, filtrator=isNotEmpty) -> list:
-    with Pool() as pool:
-        methods = pool.map(applyFiltersForMethod, methods)
-        methods = [method for method in methods if filtrator(method)]
-        joined = pool.map(join, (method.javaDoc for method in methods))
-    return joined

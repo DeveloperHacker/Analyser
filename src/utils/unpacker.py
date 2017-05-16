@@ -9,7 +9,7 @@ from variables.paths import METHODS
 class Tags:
     methods = "methods"
     method = "method"
-    javaDoc = "javaDoc"
+    java_doc = "java_doc"
     head = "head"
     param = "param"
     result = "return"
@@ -21,67 +21,61 @@ class Tags:
     parameters = "parameters"
     owner = "owner"
     contract = "contract"
-    enter = "enter"
-    enters = "enters"
-    exit = "exit"
-    exits = "exits"
-    exitId = "exitId"
-    exitIds = "exitIds"
+    condition = "inv-condition"
 
 
 @trace
-def unpackMethods() -> list:
-    parser = xml.etree.ElementTree.parse(METHODS).getroot()  # type: ElementTree
+def unpack_methods() -> list:
+    parser: ElementTree = xml.etree.ElementTree.parse(METHODS).getroot()
     methods = []
-    for methodTag in parser.findall(Tags.method):
-        javaDoc = JavaDoc()
-        for javaDocTag in methodTag.findall(Tags.javaDoc):
-            for headTag in javaDocTag.findall(Tags.head):
-                javaDoc.head = headTag.text
-            for paramTag in javaDocTag.findall(Tags.param):
-                javaDoc.params.append(paramTag.text)
-            for result in javaDocTag.findall(Tags.result):
-                javaDoc.results.append(result.text)
-            for see in javaDocTag.findall(Tags.see):
-                javaDoc.sees.append(see.text)
-            for throw in javaDocTag.findall(Tags.throws):
-                javaDoc.throws.append(throw.text)
-        description = Description()
-        for descriptionTag in methodTag.findall(Tags.description):
-            for nameTag in descriptionTag.findall(Tags.name):
-                description.name = nameTag.text
-            for typeTAg in descriptionTag.findall(Tags.type):
-                description.type = Type(typeTAg.text)
-            for paramsTag in descriptionTag.findall(Tags.parameters):
-                for paramTag in paramsTag.findall(Tags.param):
-                    parameter = Parameter()
-                    for nameTag in paramTag.findall(Tags.name):
-                        parameter.name = nameTag.text
-                    for typeTAg in paramTag.findall(Tags.type):
-                        parameter.type = Type(typeTAg.text)
-                        description.params.append(parameter)
-            for owner in descriptionTag.findall(Tags.owner):
-                description.owner = Type(owner.text)
-        contract = Contract()
-        for contractTag in methodTag.findall(Tags.contract):
-            for entersTag in contractTag.findall(Tags.enters):
-                for enterTag in entersTag.findall(Tags.enter):
-                    contract.enters.append(enterTag.text)
-            for exitsTag in contractTag.findall(Tags.exits):
-                for exitTag in exitsTag.findall(Tags.exit):
-                    contract.exits.append(exitTag.text)
-            for exitIdsTag in contractTag.findall(Tags.exitIds):
-                exitIds = {"id": None, "exits": []}
-                for exitIdTag in exitIdsTag.findall(Tags.exitId):
-                    exitIds["id"] = int(exitIdTag.text)
-                for exitsTag in exitIdsTag.findall(Tags.exits):
-                    for exitTag in exitsTag.findall(Tags.exit):
-                        exitIds["exits"].append(exitTag.text)
-                if exitIds["id"] is not None:
-                    contract.exitIds.append(exitIds)
+    for method_tag in parser.findall(Tags.method):
         method = Method()
-        method.description = description
-        method.javaDoc = javaDoc
-        method.contract = contract
+        method.java_doc = unpack_java_doc(method_tag)
+        method.description = unpack_method_description(method_tag)
+        method.contract = unpack_contract(method_tag)
         methods.append(method)
     return methods
+
+
+def unpack_java_doc(parent: ElementTree):
+    java_doc = JavaDoc()
+    for java_doc_tag in parent.findall(Tags.java_doc):
+        for head_tag in java_doc_tag.findall(Tags.head):
+            java_doc.head = head_tag.text
+        for param_tag in java_doc_tag.findall(Tags.param):
+            java_doc.params.append(param_tag.text)
+        for result_tag in java_doc_tag.findall(Tags.result):
+            java_doc.results.append(result_tag.text)
+        for see_tag in java_doc_tag.findall(Tags.see):
+            java_doc.sees.append(see_tag.text)
+        for throw_tag in java_doc_tag.findall(Tags.throws):
+            java_doc.throws.append(throw_tag.text)
+    return java_doc
+
+
+def unpack_method_description(parent: ElementTree):
+    description = Description()
+    for description_tag in parent.findall(Tags.description):
+        for name_tag in description_tag.findall(Tags.name):
+            description.name = name_tag.text
+        for type_tag in description_tag.findall(Tags.type):
+            description.type = Type(type_tag.text)
+        for params_tag in description_tag.findall(Tags.parameters):
+            for param_tag in params_tag.findall(Tags.param):
+                parameter = Parameter()
+                for name_tag in param_tag.findall(Tags.name):
+                    parameter.name = name_tag.text
+                for type_tag in param_tag.findall(Tags.type):
+                    parameter.type = Type(type_tag.text)
+                    description.params.append(parameter)
+        for owner in description_tag.findall(Tags.owner):
+            description.owner = Type(owner.text)
+    return description
+
+
+def unpack_contract(parent: ElementTree):
+    contract = Contract()
+    for contract_tag in parent.findall(Tags.contract):
+        for condition_tag in contract_tag.findall(Tags.condition):
+            contract.code = condition_tag.text
+    return contract

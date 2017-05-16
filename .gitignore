@@ -86,7 +86,6 @@ ENV/
 # Rope project settings
 .ropeproject
 
-*.sh
 *.cfg
 .idea/
 !/seq2seq/q_function_net.py

@@ -37,33 +37,19 @@ class JavaDoc:
         return len(self.head) == 0 and \
                len(self.params) == 0 and \
                len(self.results) == 0 and \
-               len(self.results) == 0 and \
-               len(self.results) == 0
+               len(self.sees) == 0 and \
+               len(self.throws) == 0
 
 
 class Contract:
     def __init__(self):
-        self.enters = []
-        self.exits = []
-        self.exitIds = []
+        self.code = ""
 
     def __str__(self) -> str:
-        lines = [":::ENTER"]
-        for enter in self.enters:
-            lines.append(enter)
-        lines.append(":::EXIT")
-        for _exit in self.exits:
-            lines.append(_exit)
-        for exitId in self.exitIds:
-            lines.append(":::EXIT-{}".format(exitId["id"]))
-            for _exit in exitId["exits"]:
-                lines.append(_exit)
-        return "\n".join(lines)
+        return self.code
 
     def empty(self) -> bool:
-        return len(self.enters) == 0 and \
-               len(self.exits) == 0 and \
-               len(self.exitIds) == 0
+        return self.code is ""
 
 
 class Description:
@@ -84,8 +70,8 @@ class Description:
 class Method:
     def __init__(self):
         self.description = Description()
-        self.javaDoc = JavaDoc()
+        self.java_doc = JavaDoc()
         self.contract = Contract()
 
     def __str__(self) -> str:
-        return "{}\n{}\n{}".format(str(self.javaDoc), str(self.description), str(self.contract))
+        return "{}\n{}\n{}".format(str(self.java_doc), str(self.description), str(self.contract))

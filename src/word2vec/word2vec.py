@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 
-from utils import batcher, dumper, filter, generator, printer, unpacker
+from utils import dumper, filters, generator, printer, unpacker
 from utils.wrapper import trace
 from variables.paths import *
 from variables.train import *
@@ -10,14 +10,12 @@ from word2vec import word2vec_optimized as word2vec
 
 @trace
 def train():
-    methods = unpacker.unpackMethods()
-    docs = filter.applyFiltersForMethods(methods)
+    methods = unpacker.unpack_methods()
+    docs = filters.applyFiltersForMethods(methods)
     with open(FILTERED, "w") as file:
         file.write("\n".join((text for doc in docs for label, text in doc if len(text) > 0)))
     embeddings = generate()
     dumper.dump(embeddings, EMBEDDINGS)
-    data = batcher.vectorization(docs, embeddings)
-    dumper.dump(data, VEC_METHODS)
 
 
 @trace

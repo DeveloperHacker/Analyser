@@ -1,12 +1,13 @@
 RESOURCES = "resources"
 
-DATA_SETS = RESOURCES + "/data_sets"
+DATA_SETS = RESOURCES + "/data-sets"
 SENTENCES = DATA_SETS + "/sentences.txt"
 FILTERED = DATA_SETS + "/filtered.txt"
 # BATCHES = DATA_SETS + "/batches.pickle"
 METHODS = DATA_SETS + "/methods.xml"
 VEC_METHODS = DATA_SETS + "/methods.pickle"
-EMBEDDINGS = DATA_SETS + "/word2vec.pickle"
+PREPARED_METHODS = DATA_SETS + "/prepared_methods.pickle"
+EMBEDDINGS = DATA_SETS + "/embeddings.pickle"
 CONTEXTS = DATA_SETS + "/contexts.pickle"
 PRETRAIN_SETS = DATA_SETS + "/pretrain_sets"
 
