@@ -69,7 +69,7 @@ class MunchhausenNet(Net):
         for i in range(OUTPUT_SIZE):
             placeholder = tf.placeholder(tf.int32, [BATCH_SIZE, NUM_TOKENS], "sample")
             self.sample.append(placeholder)
-        embeddings = tf.constant(np.asarray(Embeddings.embeddings()))
+        embeddings = tf.constant(np.asarray(WordEmbeddings.idx2emb()))
         self.inputs = {label: [tf.gather(embeddings, inp) for inp in self.indexes[label]] for label in PARTS}
 
     @trace

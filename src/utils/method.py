@@ -1,3 +1,6 @@
+from typing import List
+
+
 class Type:
     def __init__(self, name: str):
         self.name = name
@@ -49,7 +52,7 @@ class Contract:
         return self.code
 
     def empty(self) -> bool:
-        return self.code is ""
+        return self.code == ""
 
 
 class Description:
@@ -75,3 +78,6 @@ class Method:
 
     def __str__(self) -> str:
         return "{}\n{}\n{}".format(str(self.java_doc), str(self.description), str(self.contract))
+
+    def get_param_names(self) -> List[str]:
+        return [param.name for param in self.description.params]

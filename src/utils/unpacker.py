@@ -21,7 +21,7 @@ class Tags:
     parameters = "parameters"
     owner = "owner"
     contract = "contract"
-    condition = "inv-condition"
+    condition = "condition"
 
 
 @trace
@@ -41,15 +41,15 @@ def unpack_java_doc(parent: ElementTree):
     java_doc = JavaDoc()
     for java_doc_tag in parent.findall(Tags.java_doc):
         for head_tag in java_doc_tag.findall(Tags.head):
-            java_doc.head = head_tag.text
+            java_doc.head = head_tag.text or ""
         for param_tag in java_doc_tag.findall(Tags.param):
-            java_doc.params.append(param_tag.text)
+            java_doc.params.append(param_tag.text or "")
         for result_tag in java_doc_tag.findall(Tags.result):
-            java_doc.results.append(result_tag.text)
+            java_doc.results.append(result_tag.text or "")
         for see_tag in java_doc_tag.findall(Tags.see):
-            java_doc.sees.append(see_tag.text)
+            java_doc.sees.append(see_tag.text or "")
         for throw_tag in java_doc_tag.findall(Tags.throws):
-            java_doc.throws.append(throw_tag.text)
+            java_doc.throws.append(throw_tag.text or "")
     return java_doc
 
 
@@ -57,19 +57,19 @@ def unpack_method_description(parent: ElementTree):
     description = Description()
     for description_tag in parent.findall(Tags.description):
         for name_tag in description_tag.findall(Tags.name):
-            description.name = name_tag.text
+            description.name = name_tag.text or ""
         for type_tag in description_tag.findall(Tags.type):
-            description.type = Type(type_tag.text)
+            description.type = Type(type_tag.text or "")
         for params_tag in description_tag.findall(Tags.parameters):
             for param_tag in params_tag.findall(Tags.param):
                 parameter = Parameter()
                 for name_tag in param_tag.findall(Tags.name):
-                    parameter.name = name_tag.text
+                    parameter.name = name_tag.text or ""
                 for type_tag in param_tag.findall(Tags.type):
-                    parameter.type = Type(type_tag.text)
+                    parameter.type = Type(type_tag.text or "")
                     description.params.append(parameter)
         for owner in description_tag.findall(Tags.owner):
-            description.owner = Type(owner.text)
+            description.owner = Type(owner.text or "")
     return description
 
 
@@ -77,5 +77,5 @@ def unpack_contract(parent: ElementTree):
     contract = Contract()
     for contract_tag in parent.findall(Tags.contract):
         for condition_tag in contract_tag.findall(Tags.condition):
-            contract.code = condition_tag.text
+            contract.code = condition_tag.text or ""
     return contract

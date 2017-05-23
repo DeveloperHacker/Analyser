@@ -50,7 +50,7 @@ class DataSetBuilder:
         inputs_sizes = {}
         for label, embeddings in doc:
             inputs_sizes[label] = []
-            indexes[label] = embeddings + [Embeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(embeddings))]
+            indexes[label] = embeddings + [WordEmbeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(embeddings))]
             inputs_sizes[label].append(len(embeddings))
         samples = [[] for _ in range(num_functions)]
         for _ in range(num_samples // num_functions):
@@ -131,7 +131,7 @@ class DataSetBuilder:
     def indexes(method):
         doc = []
         for label, (embeddings, text) in method:
-            embeddings = [Embeddings.get_index(word) for embedding, word in zip(embeddings, text)]
+            embeddings = [WordEmbeddings.get_index(word) for embedding, word in zip(embeddings, text)]
             doc.append((label, embeddings))
         return doc
 
@@ -169,7 +169,7 @@ class DataSetBuilder:
     def indexes(method):
         doc = []
         for label, (embeddings, text) in method:
-            indexes = [Embeddings.get_index(word) for embedding, word in zip(embeddings, text)]
+            indexes = [WordEmbeddings.get_index(word) for embedding, word in zip(embeddings, text)]
             doc.append((label, indexes))
         return doc
 
@@ -180,7 +180,7 @@ class DataSetBuilder:
         for datum in batch:
             for label, _indexes in datum:
                 _inputs_sizes = len(_indexes)
-                _indexes += [Embeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(_indexes))]
+                _indexes += [WordEmbeddings.get_index(PAD) for _ in range(INPUT_SIZE - len(_indexes))]
                 indexes[label].append(_indexes)
                 inputs_sizes[label].append(_inputs_sizes)
         indexes = {label: np.transpose(np.asarray(indexes[label]), axes=(1, 0)) for label in PARTS}

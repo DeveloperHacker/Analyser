@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
-from typing import Iterable
+from typing import List
 
 from seq2seq.munchhausen.MunchhausenFormater import MunchhausenFormatter
 
@@ -9,7 +9,7 @@ class MunchhausenOptimiser:
     def __init__(self, *optimizers):
         self._instance = tuple(optimizers)
 
-    def get_optimizers(self) -> Iterable[tf.Tensor]:
+    def get_optimizers(self) -> List[tf.Tensor]:
         return self._instance
 
     def set_optimizers(self, *optimizers):

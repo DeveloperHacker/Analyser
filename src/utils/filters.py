@@ -112,7 +112,8 @@ def unpackStableReduction(string: str) -> str:
 
 
 def expandWordsAndSymbols(string: str) -> str:
-    return re.sub(r"({})".format("|\\".join(PUNCTUATION)), r" \1 ", string)
+    regex = "(" + "|".join("\\" + symbol for symbol in PUNCTUATION) + ")"
+    return re.sub(regex, r" \1 ", string)
 
 
 def filterLongSpaces(string: str) -> str:
@@ -133,6 +134,8 @@ def convert(name):
 
 
 def applyFiltersForString(string: str, params: list) -> str:
+    if string is None or params is None:
+        raise ValueError("arguments must be not None")
     if len(string) == 0: return string
     string = string.lower()
     string = filterStrings(string)
@@ -155,7 +158,7 @@ def applyFiltersForString(string: str, params: list) -> str:
 
 
 def applyFiltersForMethod(method: Method) -> Method:
-    params = [param.name for param in method.description.params]
+    params = method.get_param_names()
     java_doc = method.java_doc  # type: JavaDoc
     java_doc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
                           i, name in enumerate(params)]
