@@ -1,11 +1,18 @@
 import numpy as np
-import tensorflow as tf
+from contracts.tokens import tokens
+from contracts.tokens.MarkerToken import MarkerToken
 from typing import List, Dict, Tuple
 
-from utils import dumper as _dumper
-from variables import paths as _path
-from variables.tags import GO, PAD
-from variables.train import *
+from utils import dumper
+from variables.constants import EMBEDDING_SIZE
+from variables.paths import EMBEDDINGS
+
+GO = "@go"
+GO_emb = np.ones([EMBEDDING_SIZE], dtype=np.float32)
+PAD = "@pad"
+PAD_emb = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
+NOP = MarkerToken("@nop")
+tokens.register(NOP)
 
 
 # ToDo: thread save
@@ -17,9 +24,9 @@ class WordEmbeddings:
     @staticmethod
     def instance() -> dict:
         if WordEmbeddings._instance is None:
-            WordEmbeddings._instance = _dumper.load(_path.EMBEDDINGS)
-            WordEmbeddings._instance[GO] = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
-            WordEmbeddings._instance[PAD] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
+            WordEmbeddings._instance = dumper.load(EMBEDDINGS)
+            WordEmbeddings._instance[GO] = GO_emb
+            WordEmbeddings._instance[PAD] = PAD_emb
             WordEmbeddings._instance = list(WordEmbeddings._instance.items())
             WordEmbeddings._instance.sort(key=lambda x: x[0])
         return WordEmbeddings._instance
@@ -78,8 +85,6 @@ class WordEmbeddings:
         return WordEmbeddings.get_store(key)[1]
 
 
-INITIAL_STATE = tf.zeros([BATCH_SIZE, STATE_SIZE], dtype=np.float32)
-
 # ToDo: thread save
 class TokenEmbeddings:
     _idx2token = None
@@ -90,7 +95,7 @@ class TokenEmbeddings:
     @staticmethod
     def instance() -> List[str]:
         if TokenEmbeddings._idx2token is None:
-            TokenEmbeddings._idx2token = list(Token.instances.keys())
+            TokenEmbeddings._idx2token = list(tokens.instances())
             TokenEmbeddings._idx2token.sort()
         return TokenEmbeddings._idx2token
 
@@ -126,7 +131,7 @@ class TokenEmbeddings:
             if key in TokenEmbeddings.token2idx():
                 index = TokenEmbeddings.token2idx()[key]
             else:
-                index = TokenEmbeddings.token2idx()["UNK"]
+                raise Exception("Store with name {} is not found".format(key))
         else:
             key = tuple(key)
             if key in TokenEmbeddings.emb2idx():
@@ -146,3 +151,7 @@ class TokenEmbeddings:
     @staticmethod
     def get_token(key) -> str:
         return TokenEmbeddings.get_store(key)[1]
+
+
+NUM_TOKENS = len(TokenEmbeddings.instance())
+NUM_WORDS = len(WordEmbeddings.instance())

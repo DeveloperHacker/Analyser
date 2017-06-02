@@ -26,9 +26,6 @@ THROW = "@throw"
 
 NEXT = "@next"
 
-GO = "@go"
-PAD = "@pad"
-
 NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
 PARTS = (

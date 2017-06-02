@@ -3,7 +3,6 @@ from xml.etree.ElementTree import ElementTree
 
 from utils.method import *
 from utils.wrapper import trace
-from variables.paths import METHODS
 
 
 class Tags:
@@ -25,8 +24,8 @@ class Tags:
 
 
 @trace
-def unpack_methods() -> list:
-    parser: ElementTree = xml.etree.ElementTree.parse(METHODS).getroot()
+def unpack_methods(path: str) -> list:
+    parser: ElementTree = xml.etree.ElementTree.parse(path).getroot()
     methods = []
     for method_tag in parser.findall(Tags.method):
         method = Method()

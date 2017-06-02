@@ -1,4 +1,4 @@
-from contracts.tokens.Token import Token
+from variables.embeddings import TokenEmbeddings, WordEmbeddings
 
 WORD2VEC_EPOCHS = 500
 MUNCHHAUSEN_PRETRAIN_EPOCHS = 2
@@ -8,8 +8,9 @@ MUNCHHAUSEN_RUNS = 2000
 TRAIN_SET = 0.9
 VALIDATION_SET = 0.1
 
-TOKEN_SIZE = len(Token.instances)
 EMBEDDING_SIZE = 100
+NUM_TOKENS = len(TokenEmbeddings.instance())
+NUM_WORDS = len(WordEmbeddings.instance())
 WINDOW = 7
 STATE_SIZE = 150
 EQUATION_SIZE = 100

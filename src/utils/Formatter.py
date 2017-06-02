@@ -3,7 +3,7 @@ import logging
 from typing import List, Iterable
 
 
-class MunchhausenFormatter:
+class Formatter:
     def __init__(self, heads: List[str], formats: List[str], sizes: List[int], rows: Iterable[int], height: int):
         self.height = height
         head_segments = []
