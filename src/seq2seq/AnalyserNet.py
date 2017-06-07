@@ -52,9 +52,9 @@ def analyser_rnn(encoder_cells_fw,
             raise ValueError("Batch sizes of Inputs and inputs lengths must be equals")
 
     with vs.variable_scope("analyser_rnn"):
-        with vs.variable_scope("encoder"):
-            attention_states = []
-            for i, (_inputs, _lengths) in enumerate(zip(inputs, sequence_length)):
+        attention_states = []
+        for i, (_inputs, _lengths) in enumerate(zip(inputs, sequence_length)):
+            with vs.variable_scope("encoder_%d" % i):
                 encoder_outputs, states_fw, states_bw = stack_bidirectional_dynamic_rnn(
                     encoder_cells_fw,
                     encoder_cells_bw,
