@@ -3,7 +3,8 @@ import tensorflow as tf
 
 from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
 from constants.paths import *
-from utils import dumper, generator, printer
+from utils import dumper
+from utils.generator import classifiers, show
 from utils.wrapper import trace
 from word2vec import word2vec_optimized as word2vec
 
@@ -30,5 +31,5 @@ def generate():
 @trace
 def cluster():
     embeddings = dumper.load(EMBEDDINGS)
-    clusters = generator.KNeighbors(embeddings, 0.1)
-    printer.XNeighbors(clusters)
+    clusters = classifiers.kneighbors(embeddings, 0.1)
+    show.kneighbors(clusters)

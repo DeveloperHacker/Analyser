@@ -6,7 +6,7 @@ GENERATOR_RAW_METHODS = GENERATOR + "/methods.xml"
 EMBEDDINGS = GENERATOR + "/embeddings.pickle"
 FILTERED = GENERATOR + "/filtered.txt"
 GENERATOR_MODEL = GENERATOR + "/model.ckpt"
-GENERATOR_LOG = GENERATOR + "/word2vec.log"
+GENERATOR_LOG = GENERATOR + "/generator.log"
 
 # Analyser
 ANALYSER = RESOURCES + "/analyser"

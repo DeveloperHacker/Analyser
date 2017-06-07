@@ -9,15 +9,15 @@ from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.rnn_cell_impl import GRUCell
 
+from constants.analyser import *
+from constants.embeddings import WordEmbeddings, TokenEmbeddings, NUM_TOKENS, NUM_WORDS
+from constants.paths import RESOURCES, ANALYSER, ANALYSER_METHODS
+from constants.tags import PARTS
 from seq2seq.Net import Net
 from seq2seq.dynamic_rnn import stack_attention_dynamic_rnn, stack_bidirectional_dynamic_rnn
 from utils import dumper
 from utils.Formatter import Formatter
 from utils.wrapper import trace
-from constants.analyser import *
-from constants.embeddings import WordEmbeddings, TokenEmbeddings, NUM_TOKENS, NUM_WORDS
-from constants.paths import RESOURCES, ANALYSER, ANALYSER_METHODS
-from constants.tags import PARTS
 
 _WEIGHTS_NAME = "weights"
 _BIAS_NAME = "biases"
@@ -130,10 +130,10 @@ class AnalyserNet(Net):
                     self.inputs.append(indexes)
                     self.inputs_sizes.append(tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes"))
             self.decoder_time_steps = tf.placeholder(tf.int32, [], "time_steps")
-            cells_fw = [GRUCell(ESTATE_SIZE) for _ in range(ENUMBER)]
-            cells_bw = [GRUCell(ESTATE_SIZE) for _ in range(ENUMBER)]
-            cells_wd = [GRUCell(WDSTATE_SIZE) for _ in range(WDNUMBER)]
-            cells_td = [GRUCell(TDSTATE_SIZE) for _ in range(TDNUMBER)]
+            cells_fw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
+            cells_bw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
+            cells_wd = [GRUCell(WORD_STATE_SIZE) for _ in range(NUM_WORD_DECODERS)]
+            cells_td = [GRUCell(TOKEN_STATE_SIZE) for _ in range(NUM_TOKEN_DECODERS)]
             self.word_logits, self.word_outputs, self.token_logits, self.token_outputs = analyser_rnn(
                 cells_bw,
                 cells_fw,
@@ -143,11 +143,11 @@ class AnalyserNet(Net):
                 self.inputs_sizes,
                 NUM_WORDS,
                 NUM_TOKENS,
-                WDOUTPUT_SIZE,
-                TDOUTPUT_SIZE,
+                WORD_OUTPUT_SIZE,
+                TOKEN_OUTPUT_SIZE,
                 self.decoder_time_steps,
-                WDHEADS,
-                TDHEADS)
+                NUM_WORD_HEADS,
+                NUM_TOKEN_HEADS)
             self.top_word_outputs = tf.nn.top_k(self.word_outputs, TOP)
             self.top_token_outputs = tf.nn.top_k(self.token_outputs, TOP)
             self.word_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "word_target")
@@ -244,15 +244,26 @@ class AnalyserNet(Net):
     @trace
     def test(self):
         formatter = Formatter(
-            heads=("loss",
-                   "word target",
-                   *(["word output"] * TOP),
-                   *(["prob"] * TOP),
-                   "token target",
-                   *(["token output"] * TOP),
-                   *(["prob"] * TOP)),
-            formats=(".4f", "s", *(["s"] * TOP), *([".4f"] * TOP), "s", *(["s"] * TOP), *([".4f"] * TOP)),
-            sizes=(10, 20, *([20] * TOP), *([10] * TOP), 20, *([20] * TOP), *([10] * TOP)),
+            heads=(
+                "loss",
+                "word target",
+                *(["word output"] * TOP),
+                *(["prob"] * TOP),
+                "token target",
+                *(["token output"] * TOP),
+                *(["prob"] * TOP)),
+            formats=(
+                ".4f",
+                *(["s"] * (TOP + 1)),
+                *([".4f"] * TOP),
+                *(["s"] * (TOP + 1)),
+                *([".4f"] * TOP)),
+            sizes=(
+                10,
+                *([20] * (TOP + 1)),
+                *([10] * TOP),
+                *([20] * (TOP + 1)),
+                *([10] * TOP)),
             rows=range(3 + 4 * TOP),
             height=30
         )
@@ -294,13 +305,14 @@ class AnalyserNet(Net):
                         _token_target = TokenEmbeddings.get_token(int(tti))
                         _top_token_indexes = [TokenEmbeddings.get_token(int(i)) for i in top_toi_idx]
                         _top_token_probs = list(top_toi_prb)
-                        formatter.print(loss,
-                                        _word_target,
-                                        *_top_word_indexes,
-                                        *_top_word_probs,
-                                        _token_target,
-                                        *_top_token_indexes,
-                                        *_top_token_probs)
+                        formatter.print(
+                            loss,
+                            _word_target,
+                            *_top_word_indexes,
+                            *_top_word_probs,
+                            _token_target,
+                            *_top_token_indexes,
+                            *_top_token_probs)
 
     def build_feed_dict(self, batch) -> dict:
         feed_dict = {}

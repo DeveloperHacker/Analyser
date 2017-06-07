@@ -159,7 +159,7 @@ def applyFiltersForString(string: str, params: list) -> str:
 
 def apply_filters(method: Method) -> Method:
     params = method.get_param_names()
-    java_doc = method.java_doc  # type: JavaDoc
+    java_doc = method.java_doc
     java_doc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
                           i, name in enumerate(params)]
     java_doc.head = applyFiltersForString(java_doc.head, params)

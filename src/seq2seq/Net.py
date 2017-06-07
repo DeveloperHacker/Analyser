@@ -1,12 +1,9 @@
 import os
+import re
 import time
 from abc import ABCMeta
 
 import tensorflow as tf
-
-
-def date() -> str:
-    return time.strftime("%d-%m-%Y-%H-%M-%S")
 
 
 class Net(metaclass=ABCMeta):
@@ -23,19 +20,19 @@ class Net(metaclass=ABCMeta):
     def __init__(self, name: str, save_path: str):
         self.save_path = save_path
         self.name = name
-        self.create_time = date
+        self.create_time = time.strftime("%d-%m-%Y-%H-%M-%S")
         self._variables = None
         self._saver = None
         self.scope = None
 
     def reset(self, session: tf.Session):
-        self.create_time = date()
+        self.create_time = time.strftime("%d-%m-%Y-%H-%M-%S")
         self._saver = None
         session.run(tf.global_variables_initializer())
 
     def save(self, session: tf.Session):
         path = self.get_model_path()
-        model_path = path + "/model-{}.ckpt".format(date())
+        model_path = path + "/model-{}.ckpt".format(time.strftime("%d-%m-%Y-%H-%M-%S"))
         saver = self.get_saver()
         saver.save(session, model_path)
 
@@ -50,11 +47,9 @@ class Net(metaclass=ABCMeta):
     def restore(self, session: tf.Session):
         filtrator = lambda path: os.path.isdir(path) and len(os.listdir(path)) > 0 and self.name in path
         folder_path = self.newest(self.save_path, filtrator)
-        import re
         model_filtrator = lambda path: os.path.isfile(path) and re.match(r".+/model-.+\.ckpt\.meta", path)
         model_path = self.newest(folder_path, model_filtrator)
         model_path = ".".join(model_path.split(".")[:-1])
-        mathced = re.match(".+/model-(.+)\.ckpt", model_path)
         self.create_time = re.match(".+/model-(.+)\.ckpt", model_path).groups()[0]
         self.get_saver().restore(session, model_path)
 
