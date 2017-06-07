@@ -33,8 +33,8 @@ PARTS = (
     PARAMS[1:],
     VARIABLES[1:],
     RETURN[1:],
-    # SEE[1:],
-    # THROW[1:]
+    SEE[1:],
+    THROW[1:]
 )
 
 TAGS = (

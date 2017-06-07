@@ -31,3 +31,6 @@ class Formatter:
             logging.info(self.delimiter)
         logging.info(self.line.format(segments=list(args)))
         self.row += 1
+
+    def set_height(self, height: int):
+        self.height = height

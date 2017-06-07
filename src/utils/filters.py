@@ -1,7 +1,7 @@
 import re
 
 from utils.method import JavaDoc, Method
-from variables.tags import *
+from constants.tags import *
 
 
 class Filter:
@@ -157,7 +157,7 @@ def applyFiltersForString(string: str, params: list) -> str:
     return string
 
 
-def applyFiltersForMethod(method: Method) -> Method:
+def apply_filters(method: Method) -> Method:
     params = method.get_param_names()
     java_doc = method.java_doc  # type: JavaDoc
     java_doc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for

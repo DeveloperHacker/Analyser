@@ -20,7 +20,6 @@ class Tags:
     parameters = "parameters"
     owner = "owner"
     contract = "contract"
-    condition = "condition"
 
 
 @trace
@@ -75,6 +74,5 @@ def unpack_method_description(parent: ElementTree):
 def unpack_contract(parent: ElementTree):
     contract = Contract()
     for contract_tag in parent.findall(Tags.contract):
-        for condition_tag in contract_tag.findall(Tags.condition):
-            contract.code = condition_tag.text or ""
+        contract.code = contract_tag.text or ""
     return contract

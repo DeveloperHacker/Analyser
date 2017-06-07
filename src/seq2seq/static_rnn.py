@@ -135,7 +135,7 @@ def static_rnn(cell, inputs, initial_state=None, dtype=None,
                                  "dtype must be specified")
             state = cell.zero_state(batch_size, dtype)
 
-        if sequence_length is not None:  # Prepare variables
+        if sequence_length is not None:  # Prepare constants
             sequence_length = ops.convert_to_tensor(
                 sequence_length, name="sequence_length")
             if sequence_length.get_shape().ndims not in (None, 1):

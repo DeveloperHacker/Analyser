@@ -154,11 +154,11 @@ def bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs, sequence_length=None,
             time_dim = 0
             batch_dim = 1
 
-        def _reverse(input_, seq_lengths, seq_dim, _batch_dim):
+        def _reverse(input_, seq_lengths, seq_dim, batch_dim):
             if seq_lengths is not None:
                 return array_ops.reverse_sequence(
                     input=input_, seq_lengths=seq_lengths,
-                    seq_dim=seq_dim, batch_dim=_batch_dim)
+                    seq_dim=seq_dim, batch_dim=batch_dim)
             else:
                 return array_ops.reverse(input_, axis=[seq_dim])
 
@@ -894,7 +894,7 @@ def stack_attention_dynamic_rnn(cells,
             B_loop = vs.get_variable("bias", [input_size], dtype, init_ops.constant_initializer(0, dtype))
 
         def loop_function(prev, _):
-            return prev @ W_loop + B_loop
+            return nn_ops.relu(prev @ W_loop + B_loop)
 
     res_states = []
     prev_outputs = inputs
@@ -914,6 +914,7 @@ def stack_attention_dynamic_rnn(cells,
                     num_heads,
                     loop_function,
                     dtype)
+            loop_function = None
             res_states.append(states)
 
     return prev_outputs, tuple(res_states)

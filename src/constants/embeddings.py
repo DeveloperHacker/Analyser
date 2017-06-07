@@ -4,15 +4,16 @@ from contracts.tokens.MarkerToken import MarkerToken
 from typing import List, Dict, Tuple
 
 from utils import dumper
-from variables.constants import EMBEDDING_SIZE
-from variables.paths import EMBEDDINGS
+from constants.generator import EMBEDDING_SIZE
+from constants.paths import EMBEDDINGS
 
 GO = "@go"
 GO_emb = np.ones([EMBEDDING_SIZE], dtype=np.float32)
 PAD = "@pad"
 PAD_emb = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
-NOP = MarkerToken("@nop")
-tokens.register(NOP)
+NOP = "@nop"
+NOP_token = MarkerToken(NOP)
+tokens.register(NOP_token)
 
 
 # ToDo: thread save

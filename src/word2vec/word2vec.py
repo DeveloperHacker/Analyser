@@ -1,26 +1,16 @@
 import numpy as np
 import tensorflow as tf
 
-from utils import dumper, filters, generator, printer, unpacker
+from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
+from constants.paths import *
+from utils import dumper, generator, printer
 from utils.wrapper import trace
-from variables.paths import *
-from variables.train import *
 from word2vec import word2vec_optimized as word2vec
 
 
 @trace
-def train():
-    methods = unpacker.unpack_methods()
-    docs = filters.applyFiltersForMethods(methods)
-    with open(FILTERED, "w") as file:
-        file.write("\n".join((text for doc in docs for label, text in doc if len(text) > 0)))
-    embeddings = generate()
-    dumper.dump(embeddings, EMBEDDINGS)
-
-
-@trace
 def generate():
-    word2vec.FLAGS.save_path = DATA_SETS
+    word2vec.FLAGS.save_path = GENERATOR
     word2vec.FLAGS.train_data = FILTERED
     word2vec.FLAGS.epochs_to_train = WORD2VEC_EPOCHS
     word2vec.FLAGS.embedding_size = EMBEDDING_SIZE
@@ -31,10 +21,10 @@ def generate():
         model = word2vec.Word2Vec(options, session)
         for _ in range(options.epochs_to_train):
             model.train()
-        model.saver.save(session, WORD2VEC_MODEL, )
+        model.saver.save(session, GENERATOR_MODEL, )
         emb = model.w_in.eval(session)  # type: np.multiarray.ndarray
         embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in model.word2id.items()}
-    return embeddings
+    dumper.dump(embeddings, EMBEDDINGS)
 
 
 @trace
@@ -42,11 +32,3 @@ def cluster():
     embeddings = dumper.load(EMBEDDINGS)
     clusters = generator.KNeighbors(embeddings, 0.1)
     printer.XNeighbors(clusters)
-
-
-@trace
-def start(foo: str):
-    if foo == "train":
-        train()
-    elif foo == "cluster":
-        cluster()

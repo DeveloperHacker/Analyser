@@ -10,13 +10,15 @@ from contracts.visitors.AstCompiler import AstCompiler
 from contracts.visitors.AstVisitor import AstVisitor
 from typing import List, Any, Iterable
 
+from constants.analyser import BATCH_SIZE
+from constants.embeddings import WordEmbeddings, TokenEmbeddings, NOP, PAD
+from constants.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_RAW_METHODS, ANALYSER_METHODS
+from constants.tags import PARTS
+from generate_embeddings import join_java_doc
 from utils import unpacker, filters, dumper
+from utils.filters import apply_filters
 from utils.method import Method
 from utils.wrapper import trace
-from variables.constants import BATCH_SIZE
-from variables.embeddings import WordEmbeddings, TokenEmbeddings, NOP, PAD
-from variables.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_RAW_METHODS, ANALYSER_METHODS
-from variables.tags import NEXT, PARTS
 
 
 class StringFiltrator(AstVisitor):
@@ -34,16 +36,22 @@ class StringFiltrator(AstVisitor):
 def prepare_data_set():
     methods = unpacker.unpack_methods(ANALYSER_RAW_METHODS)
     with Pool() as pool:
-        methods = pool.map(filters.applyFiltersForMethod, methods)
-        methods = (method for method in methods if not method.java_doc.empty())
-        methods = pool.map(join_java_doc, methods)
-        methods = pool.map(index_java_doc, methods)
-        methods = pool.map(parse_contract, methods)
-        methods = (method for method in methods if len(method.contract) > 1)
-        methods = pool.map(filter_contract_text, methods)
-        methods = pool.map(index_contract, methods)
+        methods = pool.map(apply, methods)
+        methods = (method for method in methods if method is not None)
         methods = pool.map(build_batch, batching(methods))
     dumper.dump(methods, ANALYSER_METHODS)
+
+
+def apply(method: Method):
+    method = parse_contract(method)
+    if len(method.contract) <= 1: return None
+    method = filter_contract_text(method)
+    method = index_contract(method)
+    method = apply_filters(method)
+    if method.java_doc.empty(): return None
+    method = join_java_doc(method)
+    method = index_java_doc(method)
+    return method
 
 
 def vectorize(method: Method) -> List[int]:
@@ -105,19 +113,6 @@ def index_java_doc(method: Method) -> Method:
     return method
 
 
-def join_java_doc(method: Method) -> Method:
-    java_doc = method.java_doc
-    method.java_doc = {
-        "head": java_doc.head,
-        "param": (" %s " % NEXT).join(java_doc.params),
-        "variable": (" %s " % NEXT).join(java_doc.variables),
-        "return": (" %s " % NEXT).join(java_doc.results),
-        # "see": (" %s " % NEXT).join(java_doc.sees),
-        # "throw": (" %s " % NEXT).join(java_doc.throws),
-    }
-    return method
-
-
 def build_batch(methods: List[Method]):
     inputs_steps = {label: np.asarray([len(method.java_doc[label]) for method in methods]) for label in PARTS}
     output_steps = np.asarray([len(method.contract) for method in methods])
@@ -140,7 +135,7 @@ def build_batch(methods: List[Method]):
             words.append(word)
             tokens.append(token)
         words += [WordEmbeddings.get_index(PAD) for _ in range(output_steps + 1 - len(words))]
-        tokens += [TokenEmbeddings.get_index(NOP.name) for _ in range(output_steps + 1 - len(tokens))]
+        tokens += [TokenEmbeddings.get_index(NOP) for _ in range(output_steps + 1 - len(tokens))]
         word_target.append(words)
         token_target.append(tokens)
     for label in PARTS:
