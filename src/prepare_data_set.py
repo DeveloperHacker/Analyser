@@ -45,12 +45,17 @@ def prepare_data_set():
 def apply(method: Method):
     method = parse_contract(method)
     if len(method.contract) <= 1: return None
+    method = simplify_contract(method)
     method = filter_contract_text(method)
     method = index_contract(method)
     method = apply_filters(method)
     if method.java_doc.empty(): return None
     method = join_java_doc(method)
     method = index_java_doc(method)
+    return method
+
+
+def simplify_contract(method: Method):
     return method
 
 
