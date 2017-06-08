@@ -12,56 +12,55 @@ from typing import List, Any, Iterable
 
 from constants.analyser import BATCH_SIZE
 from constants.embeddings import WordEmbeddings, TokenEmbeddings, NOP, PAD
-from constants.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_RAW_METHODS, ANALYSER_METHODS
+from constants.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_METHODS, RAW_METHODS
 from constants.tags import PARTS
-from generate_embeddings import join_java_doc
-from utils import unpacker, filters, dumper
-from utils.filters import apply_filters
-from utils.method import Method
+from generate_embeddings import join_java_doc, empty
+from utils import Filter, Dumper
 from utils.wrapper import trace
 
 
 class StringFiltrator(AstVisitor):
-    def __init__(self, method: Method):
+    def __init__(self, method):
         super().__init__()
         self.method = method
 
     def _visit_string(self, node: StringNode):
         string = " ".join(word.instance for word in node.children)
-        string = filters.applyFiltersForString(string, self.method.get_param_names())
+        params = [param["name"] for param in self.method["description"]["parameters"]]
+        string = Filter.applyFiltersForString(string, params)
         node.children = [WordNode(word) for word in string.split(" ")]
 
 
 @trace
 def prepare_data_set():
-    methods = unpacker.unpack_methods(ANALYSER_RAW_METHODS)
+    methods = Dumper.json_load(RAW_METHODS)
     with Pool() as pool:
         methods = pool.map(apply, methods)
         methods = (method for method in methods if method is not None)
         methods = pool.map(build_batch, batching(methods))
-    dumper.dump(methods, ANALYSER_METHODS)
+    Dumper.pkl_dump(methods, ANALYSER_METHODS)
 
 
-def apply(method: Method):
+def apply(method):
     method = parse_contract(method)
-    if len(method.contract) <= 1: return None
+    if len(method["contract"]) <= 1: return None
     method = simplify_contract(method)
     method = filter_contract_text(method)
     method = index_contract(method)
-    method = apply_filters(method)
-    if method.java_doc.empty(): return None
+    method = Filter.apply(method)
+    if empty(method): return None
     method = join_java_doc(method)
     method = index_java_doc(method)
     return method
 
 
-def simplify_contract(method: Method):
+def simplify_contract(method):
     return method
 
 
-def vectorize(method: Method) -> List[int]:
-    result = [len(method.java_doc[label]) for label in PARTS]
-    result.append(len(method.contract))
+def vectorize(method) -> List[int]:
+    result = [len(method["java-doc"][label]) for label in PARTS]
+    result.append(len(method["contract"]))
     return result
 
 
@@ -76,51 +75,51 @@ def chunks(iterable: Iterable[Any], block_size: int):
         yield result
 
 
-def batching(methods: Iterable[Method]):
+def batching(methods: Iterable[dict]):
     methods = ((vectorize(method), method) for method in methods)
     methods = sorted(methods, key=lambda x: np.linalg.norm(x[0]))
     methods = (method for vector, method in methods)
     return (chunk for chunk in chunks(methods, BATCH_SIZE) if len(chunk) == BATCH_SIZE)
 
 
-def filter_contract_text(method: Method) -> Method:
-    tree = Parser.tree(method.contract)
+def filter_contract_text(method):
+    tree = Parser.tree(method["contract"])
     filtrator = StringFiltrator(method)
     filtrator.accept(tree)
     compiler = AstCompiler()
     compiler.accept(tree)
-    method.contract = compiler.instructions
+    method["contract"] = compiler.instructions
     return method
 
 
-def parse_contract(method: Method) -> Method:
-    method.contract = Parser.parse(method.contract.code)
+def parse_contract(method):
+    method["contract"] = Parser.parse("\n".join(method["contract"]))
     return method
 
 
-def index_contract(method: Method) -> Method:
+def index_contract(method):
     result = []
-    for instruction in method.contract:
+    for instruction in method["contract"]:
         word_index = WordEmbeddings.get_index(instruction.word)
         token_index = TokenEmbeddings.get_index(instruction.token.name)
         result.append((word_index, token_index))
-    method.contract = result
+    method["contract"] = result
     return method
 
 
-def index_java_doc(method: Method) -> Method:
+def index_java_doc(method):
     result = {}
-    for label, text in method.java_doc.items():
+    for label, text in method["java-doc"].items():
         split = text.split(" ")
         indexes = tuple(WordEmbeddings.get_index(word) for word in split)
         result[label] = indexes
-    method.java_doc = result
+    method["java-doc"] = result
     return method
 
 
-def build_batch(methods: List[Method]):
-    inputs_steps = {label: np.asarray([len(method.java_doc[label]) for method in methods]) for label in PARTS}
-    output_steps = np.asarray([len(method.contract) for method in methods])
+def build_batch(methods: List[dict]):
+    inputs_steps = {label: np.asarray([len(method["java-doc"][label]) for method in methods]) for label in PARTS}
+    output_steps = np.asarray([len(method["contract"]) for method in methods])
     inputs_steps = {label: np.max(inputs_steps[label]) for label in PARTS}
     output_steps = np.max(output_steps)
 
@@ -130,13 +129,13 @@ def build_batch(methods: List[Method]):
     token_target = []
     for method in methods:
         for label in PARTS:
-            line = method.java_doc[label]
+            line = method["java-doc"][label]
             inputs_sizes[label].append(len(line))
             line = list(line) + [WordEmbeddings.get_index(PAD) for _ in range(inputs_steps[label] + 1 - len(line))]
             inputs[label].append(line)
         words = []
         tokens = []
-        for word, token in method.contract:
+        for word, token in method["contract"]:
             words.append(word)
             tokens.append(token)
         words += [WordEmbeddings.get_index(PAD) for _ in range(output_steps + 1 - len(words))]

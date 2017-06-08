@@ -1,4 +1,5 @@
 import random
+import re
 import time
 
 import numpy as np
@@ -12,16 +13,20 @@ from constants.analyser import *
 from constants.embeddings import WordEmbeddings, TokenEmbeddings, NUM_TOKENS, NUM_WORDS
 from constants.paths import RESOURCES, ANALYSER, ANALYSER_METHODS
 from constants.tags import PARTS
+from seq2seq import dynamic_rnn
 from seq2seq.Net import Net
 from seq2seq.dynamic_rnn import stack_attention_dynamic_rnn, stack_bidirectional_dynamic_rnn
-from utils import dumper
+from utils import Dumper
 from utils.Formatter import Formatter
 from utils.wrapper import trace
 
-_WEIGHTS_NAME = "weights"
-_BIAS_NAME = "biases"
+# noinspection PyProtectedMember
+_WEIGHTS_NAME = dynamic_rnn._WEIGHTS_NAME
+# noinspection PyProtectedMember
+_BIAS_NAME = dynamic_rnn._BIAS_NAME
 
 
+@trace
 def analyser_rnn(encoder_cells_fw,
                  encoder_cells_bw,
                  word_decoder_cells,
@@ -103,6 +108,7 @@ def analyser_rnn(encoder_cells_fw,
     return word_logits, word_outputs, token_logits, token_outputs
 
 
+@trace
 def input_projection(inputs, projection_size, dtype):
     input_size = None
     for _inputs in inputs:
@@ -133,15 +139,30 @@ def input_projection(inputs, projection_size, dtype):
     return projections
 
 
-def analysing_loss(word_logits, word_targets, token_logits, token_targets):
+@trace
+def analysing_loss(word_logits,
+                   word_targets,
+                   token_logits,
+                   token_targets,
+                   variables=None,
+                   scope=None,
+                   l2_loss_weight=0.001,
+                   except_not_weights=True,
+                   except_variable_names: list = None):
+    if variables is None:
+        if scope is None:
+            raise ValueError("asdasdsa")
+        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
+
+    if except_variable_names:
+        variables = [variable for variable in variables if variable.name not in except_variable_names]
+    if except_not_weights:
+        variables = [variable for variable in variables if re.match(r".*%s.*" % _WEIGHTS_NAME, variable.name)]
     with vs.variable_scope("analysing_loss"):
-        logits = word_logits
-        targets = word_targets
-        word_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        logits = token_logits
-        targets = token_targets
-        token_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        loss = tf.reduce_mean(tf.sqrt(tf.square(word_loss) + tf.square(token_loss)))
+        word_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=word_targets, logits=word_logits)
+        token_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=token_targets, logits=token_logits)
+        l2_loss = l2_loss_weight * tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
+        loss = tf.reduce_mean(tf.sqrt(tf.square(word_loss) + tf.square(token_loss) + tf.square(l2_loss)))
     return loss
 
 
@@ -196,10 +217,15 @@ class AnalyserNet(Net):
             self.top_token_outputs = tf.nn.top_k(self.token_outputs, TOP)
             self.word_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "word_target")
             self.token_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "token_target")
-            self.loss = analysing_loss(self.word_logits, self.word_targets, self.token_logits, self.token_targets)
+            self.scope = vs.get_variable_scope().name
+            self.loss = analysing_loss(
+                self.word_logits,
+                self.word_targets,
+                self.token_logits,
+                self.token_targets,
+                self.get_variables())
         self.optimizer = tf.train.AdamOptimizer().minimize(self.loss)
-        self.data_set = dumper.load(ANALYSER_METHODS)
-        self.scope = vs.get_variable_scope().name
+        self.data_set = Dumper.pkl_load(ANALYSER_METHODS)
 
     def get_data_set(self) -> (list, list, list):
         data_set = list(self.data_set)
@@ -228,6 +254,18 @@ class AnalyserNet(Net):
         validation_set = data_set[-validation_set_length:]
         return train_set, validation_set, test_set
 
+    def build_feed_dict(self, batch) -> dict:
+        feed_dict = {}
+        inputs, inputs_sizes, word_targets, token_targets = batch
+        for i, label in enumerate(PARTS):
+            feed_dict[self.inputs[i]] = np.asarray(inputs[label]).T
+            feed_dict[self.inputs_sizes[i]] = inputs_sizes[label]
+        decoder_time_steps = len(word_targets)
+        feed_dict[self.word_targets] = word_targets.T
+        feed_dict[self.token_targets] = token_targets.T
+        feed_dict[self.decoder_time_steps] = decoder_time_steps
+        return feed_dict
+
     @trace
     def pretrain(self):
         pass
@@ -243,7 +281,7 @@ class AnalyserNet(Net):
         )
         figure = ProxyFigure("train")
         train_loss_graph = figure.fill_graph(1, 1, 1, mode="-ob", color="blue", alpha=0.3)
-        validation_loss_graph = figure.fill_graph(1, 1, 1, mode="-or", color="red", alpha=0.3)
+        validation_loss_graph = figure.fill_graph(1, 1, 1, mode="or", color="red", alpha=0.3)
         figure.set_x_label(1, 1, 1, "epoch")
         figure.set_y_label(1, 1, 1, "loss")
 
@@ -269,12 +307,12 @@ class AnalyserNet(Net):
                 stop = time.time()
                 delay = stop - start
                 train_loss = np.mean(train_losses)
-                var_train_loss = np.var(train_losses)
+                deviation_train_loss = np.sqrt(np.var(train_losses))
                 validation_loss = np.mean(validation_losses)
-                var_validation_loss = np.var(validation_losses)
+                deviation_validation_loss = np.sqrt(np.var(validation_losses))
                 formatter.print(epoch, delay, train_loss, validation_loss)
-                train_loss_graph.append(epoch, train_loss, var_train_loss)
-                validation_loss_graph.append(epoch, validation_loss, var_validation_loss)
+                train_loss_graph.append(epoch, train_loss, deviation_train_loss)
+                validation_loss_graph.append(epoch, validation_loss, deviation_validation_loss)
                 figure.draw()
                 figure.save(self.get_model_path() + "/train.png")
                 writer.flush()
@@ -320,20 +358,24 @@ class AnalyserNet(Net):
                     self.word_targets,
                     self.top_word_outputs,
                     self.token_targets,
-                    self.top_token_outputs)
-                loss, word_target, top_word_outputs, token_target, top_token_outputs = session.run(fetches, feed_dict)
-                formatter.set_height(word_target.shape[1])
+                    self.top_token_outputs,
+                    self.inputs)
+                loss, word_target, top_word_outputs, token_target, top_token_outputs, inputs = session.run(
+                    fetches,
+                    feed_dict)
+                formatter.height = word_target.shape[1]
                 top_word_indexes = top_word_outputs.indices
                 top_word_probs = top_word_outputs.values
                 top_token_indexes = top_token_outputs.indices
                 top_token_probs = top_token_outputs.values
-                for wt, top_wo_idx, top_wo_prb, tt, top_to_idx, top_to_prb in zip(
+                for wt, top_wo_idx, top_wo_prb, tt, top_to_idx, top_to_prb, *inps in zip(
                         word_target,
                         top_word_indexes,
                         top_word_probs,
                         token_target,
                         top_token_indexes,
-                        top_token_probs):
+                        top_token_probs,
+                        *inputs):
                     for wti, top_woi_idx, top_woi_prb, tti, top_toi_idx, top_toi_prb in zip(
                             wt,
                             top_wo_idx,
@@ -355,15 +397,6 @@ class AnalyserNet(Net):
                             _token_target,
                             *_top_token_indexes,
                             *_top_token_probs)
-
-    def build_feed_dict(self, batch) -> dict:
-        feed_dict = {}
-        inputs, inputs_sizes, word_targets, token_targets = batch
-        for i, label in enumerate(PARTS):
-            feed_dict[self.inputs[i]] = np.asarray(inputs[label]).T
-            feed_dict[self.inputs_sizes[i]] = inputs_sizes[label]
-        decoder_time_steps = len(word_targets)
-        feed_dict[self.word_targets] = word_targets.T
-        feed_dict[self.token_targets] = token_targets.T
-        feed_dict[self.decoder_time_steps] = decoder_time_steps
-        return feed_dict
+                    for inp in inps:
+                        print(" ".join(WordEmbeddings.get_word(int(i)) for i in inp))
+                    print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")

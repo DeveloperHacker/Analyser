@@ -19,7 +19,7 @@ _reverse_seq = rnn._reverse_seq
 # noinspection PyProtectedMember
 _rnn_step = rnn._rnn_step
 # noinspection PyProtectedMember
-linear = rnn_cell_impl._linear
+_linear = rnn_cell_impl._linear
 
 
 def static_rnn(cell, inputs, initial_state=None, dtype=None,

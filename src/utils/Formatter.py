@@ -5,7 +5,7 @@ from typing import List, Iterable
 
 class Formatter:
     def __init__(self, heads: List[str], formats: List[str], sizes: List[int], rows: Iterable[int], height: int):
-        self.height = height
+        self._height = height
         head_segments = []
         line_segments = []
         delimiter_segments = []
@@ -17,20 +17,26 @@ class Formatter:
         self.line = "║" + "│".join(line_segments) + "║"
         self.delimiter = "║" + "│".join(delimiter_segments) + "║"
         self.head = self.head.format(segments=heads)
-        self.row = 0
+        self._row = 0
 
     def run(self, model_name: str):
-        self.row = 0
+        self._row = 0
         print("RUN model: {}".format(model_name))
 
     def print(self, *args):
-        if self.row % self.height == 0:
-            if self.row > 0:
+        if self._row % self._height == 0:
+            if self._row > 0:
                 logging.info(self.delimiter)
             logging.info(self.head)
             logging.info(self.delimiter)
         logging.info(self.line.format(segments=list(args)))
-        self.row += 1
+        self._row += 1
 
-    def set_height(self, height: int):
-        self.height = height
+    @property
+    def height(self):
+        return self.height
+
+    @height.setter
+    def height(self, height: int):
+        self._height = height
+        self._row = self._height

@@ -1,6 +1,5 @@
 import re
 
-from utils.method import JavaDoc, Method
 from constants.tags import *
 
 
@@ -157,15 +156,13 @@ def applyFiltersForString(string: str, params: list) -> str:
     return string
 
 
-def apply_filters(method: Method) -> Method:
-    params = method.get_param_names()
-    java_doc = method.java_doc
-    java_doc.variables = ["@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params)) for
-                          i, name in enumerate(params)]
-    java_doc.head = applyFiltersForString(java_doc.head, params)
-    java_doc.params = [applyFiltersForString(param, params) for param in java_doc.params]
-    java_doc.results = [applyFiltersForString(result, params) for result in java_doc.results]
-    java_doc.throws = [applyFiltersForString(throw, params) for throw in java_doc.throws]
-    java_doc.sees = [applyFiltersForString(see, params) for see in java_doc.sees]
-    method.java_doc = java_doc
+def apply(method):
+    params = [param["name"] for param in method["description"]["parameters"]]
+    java_doc = method["java-doc"]
+    for label, text in java_doc.items():
+        java_doc[label] = [applyFiltersForString(param, params) for param in text]
+    java_doc["variables"] = [
+        "@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params))
+        for i, name in enumerate(params)
+    ]
     return method

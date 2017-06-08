@@ -29,12 +29,12 @@ NEXT = "@next"
 NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
 PARTS = (
-    HEAD[1:],
-    PARAMS[1:],
-    VARIABLES[1:],
-    RETURN[1:],
-    SEE[1:],
-    THROW[1:]
+    "head",
+    "parameters",
+    "results",
+    "variables",
+    "sees",
+    "throws"
 )
 
 TAGS = (

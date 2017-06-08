@@ -1,8 +1,8 @@
 RESOURCES = "resources"
+RAW_METHODS = RESOURCES + "/data-set.json"
 
 # Generator
 GENERATOR = RESOURCES + "/generator"
-GENERATOR_RAW_METHODS = GENERATOR + "/methods.xml"
 EMBEDDINGS = GENERATOR + "/embeddings.pickle"
 FILTERED = GENERATOR + "/filtered.txt"
 GENERATOR_MODEL = GENERATOR + "/model.ckpt"

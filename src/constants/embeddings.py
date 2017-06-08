@@ -3,7 +3,7 @@ from contracts.tokens import tokens
 from contracts.tokens.MarkerToken import MarkerToken
 from typing import List, Dict, Tuple
 
-from utils import dumper
+from utils import Dumper
 from constants.generator import EMBEDDING_SIZE
 from constants.paths import EMBEDDINGS
 
@@ -25,7 +25,7 @@ class WordEmbeddings:
     @staticmethod
     def instance() -> dict:
         if WordEmbeddings._instance is None:
-            WordEmbeddings._instance = dumper.load(EMBEDDINGS)
+            WordEmbeddings._instance = Dumper.pkl_load(EMBEDDINGS)
             WordEmbeddings._instance[GO] = GO_emb
             WordEmbeddings._instance[PAD] = PAD_emb
             WordEmbeddings._instance = list(WordEmbeddings._instance.items())

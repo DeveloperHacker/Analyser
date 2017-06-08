@@ -2,36 +2,43 @@ import logging
 import sys
 from multiprocessing.pool import Pool
 
-from constants.paths import FILTERED, GENERATOR_RAW_METHODS, GENERATOR_LOG
-from utils.filters import apply_filters, NEXT
-from utils.method import Method
-from utils.unpacker import unpack_methods
+import tensorflow as tf
+
+from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
+from constants.paths import *
+from utils import Dumper, Filter, Generator
 from utils.wrapper import trace
-from word2vec.word2vec import generate, cluster
+from word2vec import word2vec_optimized as word2vec
 
 
-def join_java_doc(method: Method) -> Method:
-    java_doc = method.java_doc
-    method.java_doc = {
-        "head": java_doc.head,
-        "param": (" %s " % NEXT).join(java_doc.params),
-        "variable": (" %s " % NEXT).join(java_doc.variables),
-        "return": (" %s " % NEXT).join(java_doc.results),
-        "see": (" %s " % NEXT).join(java_doc.sees),
-        "throw": (" %s " % NEXT).join(java_doc.throws),
-    }
+def empty(method):
+    for label, text in method["java-doc"].items():
+        if len(text) > 0:
+            return False
+    return True
+
+
+def join_java_doc(method):
+    java_doc = {}
+    for label, text in method["java-doc"].items():
+        if label == "head":
+            java_doc[label] = " ".join(text)
+        else:
+            java_doc[label] = (" %s " % Filter.NEXT).join(text)
+    method["java-doc"] = java_doc
     return method
 
 
-def extract_docs(method: Method):
-    java_doc = method.java_doc
-    result = (text.strip() for label, text in java_doc.items())
+def extract_docs(method):
+    result = (text.strip() for label, text in method["java-doc"].items())
     result = "\n".join(text for text in result if len(text) > 0)
     return result
 
 
-def apply(method: Method):
-    method = apply_filters(method)
+def apply(method):
+    if empty(method):
+        return None
+    method = Filter.apply(method)
     method = join_java_doc(method)
     doc = extract_docs(method)
     return doc
@@ -39,17 +46,43 @@ def apply(method: Method):
 
 @trace
 def prepare():
-    methods = unpack_methods(GENERATOR_RAW_METHODS)
-    methods = (method for method in methods if not method.java_doc.empty())
+    methods = Dumper.json_load(RAW_METHODS)
     with Pool() as pool:
         docs = pool.map(apply, methods)
+    docs = [doc for doc in docs if doc is not None]
     with open(FILTERED, "w") as file:
         file.write("\n".join(docs))
+
+
+@trace
+def generate():
+    word2vec.FLAGS.save_path = GENERATOR
+    word2vec.FLAGS.train_data = FILTERED
+    word2vec.FLAGS.epochs_to_train = WORD2VEC_EPOCHS
+    word2vec.FLAGS.embedding_size = EMBEDDING_SIZE
+    word2vec.FLAGS.window_size = WINDOW
+    options = word2vec.Options()
+
+    with tf.Graph().as_default(), tf.Session() as session, tf.device("/cpu:0"):
+        model = word2vec.Word2Vec(options, session)
+        for _ in range(options.epochs_to_train):
+            model.train()
+        model.saver.save(session, GENERATOR_MODEL)
+        emb = model.w_in.eval(session)
+        embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in model.word2id.items()}
+    Dumper.pkl_dump(embeddings, EMBEDDINGS)
+
+
+@trace
+def cluster():
+    embeddings = Dumper.pkl_load(EMBEDDINGS)
+    clusters = Generator.classifiers.kneighbors(embeddings, 0.1)
+    Generator.show.kneighbors(clusters)
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, filename=GENERATOR_LOG)
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
     prepare()
-    generate()
-    cluster()
+    # generate()
+    # cluster()
