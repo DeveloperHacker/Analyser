@@ -7,6 +7,10 @@ import tensorflow as tf
 
 
 class Net(metaclass=ABCMeta):
+    class NaNException(Exception):
+        def __init__(self):
+            super().__init__("NaN hasn't expected")
+
     def get_saver(self) -> tf.train.Saver:
         if self._saver is None:
             self._saver = tf.train.Saver(var_list=self.get_variables())

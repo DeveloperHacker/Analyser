@@ -247,7 +247,8 @@ class AnalyserNet(Net):
         figure.set_x_label(1, 1, 1, "epoch")
         figure.set_y_label(1, 1, 1, "loss")
 
-        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]
+        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]  # suppress dummy warning hack
+
         with tf.Session() as session, tf.device('/cpu:0'):
             writer = tf.summary.FileWriter(RESOURCES + "/analyser/summary", session.graph)
             self.reset(session)
@@ -275,9 +276,11 @@ class AnalyserNet(Net):
                 train_loss_graph.append(epoch, train_loss, var_train_loss)
                 validation_loss_graph.append(epoch, validation_loss, var_validation_loss)
                 figure.draw()
-                self.save(session)
                 figure.save(self.get_model_path() + "/train.png")
-            writer.flush()
+                writer.flush()
+                if np.isnan(train_loss) or np.isnan(validation_loss):
+                    raise Net.NaNException()
+                self.save(session)
         writer.close()
 
     @trace
