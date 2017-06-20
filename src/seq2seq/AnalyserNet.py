@@ -8,31 +8,20 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.rnn_cell_impl import GRUCell
 
 from constants.analyser import *
-from constants.embeddings import WordEmbeddings, TokenEmbeddings, NUM_TOKENS, NUM_WORDS
+from constants.embeddings import WordEmbeddings, NUM_TOKENS, TokenEmbeddings
 from constants.paths import RESOURCES, ANALYSER, ANALYSER_METHODS
 from constants.tags import PARTS
 from seq2seq.Net import Net
-from seq2seq.analyser_rnn import analyser_rnn, input_projection, analysing_loss, sequence_output
+from seq2seq.analyser_rnn import analyser_rnn, input_projection, tree_output, analysing_loss
 from utils import Dumper
 from utils.Formatter import Formatter
 from utils.wrapper import trace
 
 
 class AnalyserNet(Net):
+    @trace
     def __init__(self):
         super().__init__("analyser", ANALYSER)
-        self.top_token_outputs = None
-        self.top_word_outputs = None
-        self.decoder_time_steps = None
-        self.token_outputs = None
-        self.inputs = None
-        self.inputs_sizes = None
-        self.token_targets = None
-        self.word_outputs = None
-        self.word_targets = None
-        self.loss = None
-        self.optimizer = None
-        self.data_set = None
         with vs.variable_scope(self.name):
             self.inputs = []
             self.embeddings = []
@@ -45,10 +34,10 @@ class AnalyserNet(Net):
                     self.inputs.append(indexes)
                     self.inputs_sizes.append(tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes"))
             self.decoder_time_steps = tf.placeholder(tf.int32, [], "time_steps")
+            self.depth = tf.placeholder(tf.int32, [], "depth")
             cells_fw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
             cells_bw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
-            cells_wd = [GRUCell(WORD_STATE_SIZE) for _ in range(NUM_WORD_DECODERS)]
-            cells_td = [GRUCell(TOKEN_STATE_SIZE) for _ in range(NUM_TOKEN_DECODERS)]
+            cells = [GRUCell(WORD_STATE_SIZE) for _ in range(NUM_DECODERS)]
             projection = input_projection(self.embeddings, INPUT_SIZE, tf.float32)
             with vs.variable_scope("analyser_rnn"):
                 attention_states = analyser_rnn(
@@ -57,30 +46,21 @@ class AnalyserNet(Net):
                     projection,
                     self.inputs_sizes,
                     tf.float32)
-                self.word_logits, self.word_outputs, self.token_logits, self.token_outputs = sequence_output(
+                self.labels_logits, self.labels, self.outputs_logits, self.outputs = tree_output(
                     attention_states,
-                    cells_wd,
-                    cells_td,
-                    NUM_WORDS,
-                    NUM_TOKENS,
-                    WORD_OUTPUT_SIZE,
-                    TOKEN_OUTPUT_SIZE,
+                    cells,
                     self.decoder_time_steps,
-                    NUM_WORD_HEADS,
-                    NUM_TOKEN_HEADS,
-                    tf.float32
-                )
-            self.top_word_outputs = tf.nn.top_k(self.word_outputs, TOP)
-            self.top_token_outputs = tf.nn.top_k(self.token_outputs, TOP)
-            self.word_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "word_target")
-            self.token_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "token_target")
+                    NUM_HEADS,
+                    NUM_TOKENS,
+                    self.depth,
+                    tf.float32)
+            self.top_labels = tf.nn.top_k(self.labels, TOP)
+            self.top_outputs = tf.nn.top_k(self.outputs, TOP)
+            self.labels_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "labels_targets")
+            self.outputs_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None], "outputs_targets")
             self.scope = vs.get_variable_scope().name
-            self.loss = analysing_loss(
-                self.word_logits,
-                self.word_targets,
-                self.token_logits,
-                self.token_targets,
-                self.get_variables())
+            data = ((self.labels_targets, self.labels_logits), (self.outputs_targets, self.outputs_logits))
+            self.loss = analysing_loss(data, self.get_variables())
         self.optimizer = tf.train.AdamOptimizer().minimize(self.loss)
         self.data_set = Dumper.pkl_load(ANALYSER_METHODS)
 
@@ -113,14 +93,14 @@ class AnalyserNet(Net):
 
     def build_feed_dict(self, batch) -> dict:
         feed_dict = {}
-        inputs, inputs_sizes, word_targets, token_targets = batch
+        inputs, inputs_sizes, labels, outputs, steps, depth = batch
         for i, label in enumerate(PARTS):
             feed_dict[self.inputs[i]] = np.asarray(inputs[label]).T
             feed_dict[self.inputs_sizes[i]] = inputs_sizes[label]
-        decoder_time_steps = len(word_targets)
-        feed_dict[self.word_targets] = word_targets.T
-        feed_dict[self.token_targets] = token_targets.T
-        feed_dict[self.decoder_time_steps] = decoder_time_steps
+        feed_dict[self.decoder_time_steps] = steps
+        feed_dict[self.depth] = depth
+        feed_dict[self.labels_targets] = labels
+        feed_dict[self.outputs_targets] = outputs
         return feed_dict
 
     @trace
@@ -129,21 +109,19 @@ class AnalyserNet(Net):
 
     @trace
     def train(self):
+        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]  # suppress dummy warning hack
+
         formatter = Formatter(
             heads=("epoch", "time", "train", "validation"),
             formats=("d", ".4f", ".4f", ".4f"),
             sizes=(10, 20, 20, 20),
             rows=(0, 1, 2, 3),
-            height=10
-        )
+            height=10)
         figure = ProxyFigure("train")
         train_loss_graph = figure.fill_graph(1, 1, 1, mode="-ob", color="blue", alpha=0.3)
         validation_loss_graph = figure.fill_graph(1, 1, 1, mode="or", color="red", alpha=0.3)
         figure.set_x_label(1, 1, 1, "epoch")
         figure.set_y_label(1, 1, 1, "loss")
-
-        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]  # suppress dummy warning hack
-
         with tf.Session() as session, tf.device('/cpu:0'):
             writer = tf.summary.FileWriter(RESOURCES + "/analyser/summary", session.graph)
             self.reset(session)
@@ -183,27 +161,17 @@ class AnalyserNet(Net):
         formatter = Formatter(
             heads=(
                 "loss",
-                "word target",
-                *(["word output"] * TOP),
-                *(["prob"] * TOP),
-                "token target",
-                *(["token output"] * TOP),
-                *(["prob"] * TOP)),
+                "target",
+                *(["output", "prob"] * TOP)),
             formats=(
                 ".4f",
-                *(["s"] * (TOP + 1)),
-                *([".4f"] * TOP),
-                *(["s"] * (TOP + 1)),
-                *([".4f"] * TOP)),
+                "s",
+                *(["s", ".4f"] * TOP)),
             sizes=(
-                10,
-                *([20] * (TOP + 1)),
-                *([10] * TOP),
-                *([20] * (TOP + 1)),
-                *([10] * TOP)),
-            rows=range(3 + 4 * TOP),
-            height=30
-        )
+                12,
+                20,
+                *([20, 12] * TOP)),
+            rows=range(2 + 2 * TOP))
         with tf.Session() as session, tf.device('/cpu:0'):
             self.reset(session)
             self.restore(session)
@@ -212,48 +180,34 @@ class AnalyserNet(Net):
                 feed_dict = self.build_feed_dict(batch)
                 fetches = (
                     self.loss,
-                    self.word_targets,
-                    self.top_word_outputs,
-                    self.token_targets,
-                    self.top_token_outputs,
+                    self.labels_targets,
+                    self.top_labels,
+                    self.outputs_targets,
+                    self.top_outputs,
                     self.inputs)
-                loss, word_target, top_word_outputs, token_target, top_token_outputs, inputs = session.run(
-                    fetches,
-                    feed_dict)
-                formatter.height = word_target.shape[1]
-                top_word_indexes = top_word_outputs.indices
-                top_word_probs = top_word_outputs.values
-                top_token_indexes = top_token_outputs.indices
-                top_token_probs = top_token_outputs.values
-                for wt, top_wo_idx, top_wo_prb, tt, top_to_idx, top_to_prb, *inps in zip(
-                        word_target,
-                        top_word_indexes,
-                        top_word_probs,
-                        token_target,
-                        top_token_indexes,
-                        top_token_probs,
+                loss, labels_targets, top_labels, outputs_targets, top_outputs, inputs = session.run(fetches, feed_dict)
+                top_labels_indexes = top_labels.indices
+                top_labels_probs = top_labels.values
+                top_outputs_indexes = top_outputs.indices
+                top_outputs_probs = top_outputs.values
+                for lt, tli, tlp, ot, toi, top, *inps in zip(
+                        labels_targets,
+                        top_labels_indexes,
+                        top_labels_probs,
+                        outputs_targets,
+                        top_outputs_indexes,
+                        top_outputs_probs,
                         *inputs):
-                    for wti, top_woi_idx, top_woi_prb, tti, top_toi_idx, top_toi_prb in zip(
-                            wt,
-                            top_wo_idx,
-                            top_wo_prb,
-                            tt,
-                            top_to_idx,
-                            top_to_prb):
-                        _word_target = WordEmbeddings.get_word(int(wti))
-                        _top_word_indexes = [WordEmbeddings.get_word(int(i)) for i in top_woi_idx]
-                        _top_word_probs = list(top_woi_prb)
-                        _token_target = TokenEmbeddings.get_token(int(tti))
-                        _top_token_indexes = [TokenEmbeddings.get_token(int(i)) for i in top_toi_idx]
-                        _top_token_probs = list(top_toi_prb)
-                        formatter.print(
-                            loss,
-                            _word_target,
-                            *_top_word_indexes,
-                            *_top_word_probs,
-                            _token_target,
-                            *_top_token_indexes,
-                            *_top_token_probs)
-                    for inp in inps:
-                        print(" ".join(WordEmbeddings.get_word(int(i)) for i in inp))
-                    print("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^")
+                    formatter.print_head()
+                    for lt_i, tli_i, tlp_i, ot_i, toi_i, top_i in zip(lt, tli, tlp, ot, toi, top):
+                        lt_i = TokenEmbeddings.get_token(int(lt_i))
+                        tli_i = (TokenEmbeddings.get_token(int(i)) for i in tli_i)
+                        formatter.print(loss, lt_i, *(elem for pair in zip(tli_i, tlp_i) for elem in pair))
+                        for ot_ij, toi_ij, top_ij in zip(ot_i, toi_i, top_i):
+                            ot_ij = TokenEmbeddings.get_token(int(ot_ij))
+                            toi_ij = (TokenEmbeddings.get_token(int(i)) for i in toi_ij)
+                            formatter.print(loss, ot_ij, *(elem for pair in zip(toi_ij, top_ij) for elem in pair))
+                        formatter.print_delimiter()
+                    for inp, label in zip(inps, PARTS):
+                        line = " ".join(WordEmbeddings.get_word(int(i)) for i in inp)
+                        formatter.print_appendix("{:10s} {} {}".format(label, formatter.vd, line))

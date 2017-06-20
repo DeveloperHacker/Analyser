@@ -1,5 +1,3 @@
-import re
-
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops, array_ops, variable_scope as vs, init_ops
 
@@ -66,7 +64,6 @@ def input_projection(inputs, projection_size, dtype):
             input_length = _inputs.get_shape()[1].value
             if input_length is None:
                 input_length = tf.shape(_inputs)[1]
-
             _inputs = tf.reshape(_inputs, [batch_size * input_length, input_size])
             projection = _inputs @ W_enc + B_enc
             projection = tf.reshape(projection, [batch_size, input_length, projection_size])
@@ -74,29 +71,16 @@ def input_projection(inputs, projection_size, dtype):
     return projections
 
 
-def analysing_loss(word_logits,
-                   word_targets,
-                   token_logits,
-                   token_targets,
-                   variables=None,
-                   scope=None,
-                   l2_loss_weight=0.001,
-                   except_not_weights=True,
-                   except_variable_names: list = None):
-    if variables is None:
-        if scope is None:
-            raise ValueError("Expected trainable variables or they scope")
-        variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
-
-    if except_variable_names:
-        variables = [variable for variable in variables if variable.name not in except_variable_names]
-    if except_not_weights:
-        variables = [variable for variable in variables if re.match(r".*%s.*" % _WEIGHTS_NAME, variable.name)]
+def analysing_loss(data, variables, l2_loss_weight=0.0001):
     with vs.variable_scope("analysing_loss"):
-        word_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=word_targets, logits=word_logits)
-        token_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=token_targets, logits=token_logits)
+        losses = []
+        for targets, logits in data:
+            data_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+            data_loss = tf.reduce_mean(data_loss, list(range(1, len(data_loss.shape))))
+            losses.append(data_loss)
+        losses = tf.stack(losses)
         l2_loss = l2_loss_weight * tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-        loss = tf.reduce_mean(tf.sqrt(tf.square(word_loss) + tf.square(token_loss) + tf.square(l2_loss)))
+        loss = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(losses), 0) + tf.square(l2_loss)))
     return loss
 
 
@@ -160,13 +144,7 @@ def sequence_output(attention_states,
     return word_logits, word_outputs, token_logits, token_outputs
 
 
-def tree_output(attention_states,
-                root_cells,
-                root_time_steps,
-                root_num_heads,
-                num_tokens,
-                tree_height,
-                dtype):
+def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, num_tokens, tree_height, dtype):
     batch_size = None
     for state in attention_states:
         _batch_size = state.get_shape()[0].value
@@ -184,7 +162,7 @@ def tree_output(attention_states,
             root_num_heads,
             dtype=dtype)
         roots = root_decoder_states[-1]
-        labels = root_decoder_outputs[-1]
+        labels = root_decoder_outputs
         num_roots = roots.get_shape()[0].value
         if num_roots is None:
             num_roots = array_ops.shape(roots)[0]
@@ -193,6 +171,9 @@ def tree_output(attention_states,
 
     with vs.variable_scope("tree_decoder"):
         bias_initializer = init_ops.constant_initializer(0, dtype)
+        with vs.variable_scope("TreeLabelProjection"):
+            W_lbl = vs.get_variable(_WEIGHTS_NAME, [num_tokens, num_tokens], dtype)
+            B_lbl = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
         with vs.variable_scope("TreeOutputProjection"):
             W_out = vs.get_variable(_WEIGHTS_NAME, [state_size, num_tokens], dtype)
             B_out = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
@@ -208,8 +189,7 @@ def tree_output(attention_states,
                 size=states_ta_size,
                 tensor_array_name="states",
                 element_shape=roots.get_shape(),
-                clear_after_read=False
-            )
+                clear_after_read=False)
 
         def _time_step(time, size, _states_ta):
             _state = _states_ta.read(time)
@@ -222,18 +202,29 @@ def tree_output(attention_states,
             _states_ta = _states_ta.write(size + 1, _right_state)
             return time + 1, size + 2, _states_ta
 
+        num_loops = 2 ** (tree_height - 1) - 1
+        loop_condition = lambda _time, *_: _time < num_loops
         states_ta = states_ta.write(0, roots)
-        _, _, states_ta = control_flow_ops.while_loop(
-            cond=lambda _time, *_: _time < 2 ** (tree_height - 1) - 1,
-            body=_time_step,
-            loop_vars=(0, 1, states_ta))
+        _, _, states_ta = control_flow_ops.while_loop(loop_condition, _time_step, (0, 1, states_ta))
 
-        with vs.variable_scope("OutputsProjection"):
+        with vs.variable_scope("LabelProjection"):
+            labels = tf.reshape(labels, [num_roots * batch_size, num_tokens])
+            labels_logits = labels @ W_lbl + B_lbl
+            labels = tf.nn.softmax(labels_logits, 1)
+            labels_logits = tf.reshape(labels_logits, [num_roots, batch_size, num_tokens])
+            labels = tf.reshape(labels, [num_roots, batch_size, num_tokens])
+            labels_logits = tf.transpose(labels_logits, [1, 0, 2])
+            labels = tf.transpose(labels, [1, 0, 2])
+        with vs.variable_scope("OutputProjection"):
             states = states_ta.stack()
             states = tf.reshape(states, [states_ta_size * num_roots * batch_size, state_size])
-            outputs = states @ W_out + B_out
+            outputs_logits = states @ W_out + B_out
+            outputs = tf.nn.softmax(outputs_logits, 1)
+            outputs_logits = tf.reshape(outputs_logits, [states_ta_size, num_roots, batch_size, num_tokens])
             outputs = tf.reshape(outputs, [states_ta_size, num_roots, batch_size, num_tokens])
-    return outputs
+            outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
+            outputs = tf.transpose(outputs, [2, 1, 0, 3])
+    return labels_logits, labels, outputs_logits, outputs
 
 
 def main():

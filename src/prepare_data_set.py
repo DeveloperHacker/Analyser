@@ -1,17 +1,19 @@
 import logging
 import sys
 from multiprocessing.pool import Pool
+from typing import List, Any, Iterable
 
 import numpy as np
+from contracts.guides.AstBfsGuide import AstBfsGuide
+from contracts.guides.AstDfsGuide import AstDfsGuide
+from contracts.nodes.Ast import Ast
 from contracts.nodes.StringNode import StringNode
-from contracts.nodes.WordNode import WordNode
 from contracts.parser.Parser import Parser
 from contracts.visitors.AstCompiler import AstCompiler
 from contracts.visitors.AstVisitor import AstVisitor
-from typing import List, Any, Iterable
 
 from constants.analyser import BATCH_SIZE
-from constants.embeddings import WordEmbeddings, TokenEmbeddings, NOP, PAD
+from constants.embeddings import WordEmbeddings, TokenEmbeddings, PAD, NOP
 from constants.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_METHODS, RAW_METHODS
 from constants.tags import PARTS
 from generate_embeddings import join_java_doc, empty
@@ -22,13 +24,19 @@ from utils.wrapper import trace
 class StringFiltrator(AstVisitor):
     def __init__(self, method):
         super().__init__()
-        self.method = method
+        self._tree = None
+        self._params = [param["name"] for param in method["description"]["parameters"]]
 
-    def _visit_string(self, node: StringNode):
-        string = " ".join(word.instance for word in node.children)
-        params = [param["name"] for param in self.method["description"]["parameters"]]
-        string = Filter.applyFiltersForString(string, params)
-        node.children = [WordNode(word) for word in string.split(" ")]
+    def visit(self, ast: Ast):
+        self._tree = ast
+
+    def result(self):
+        return self._tree
+
+    def visit_string(self, node: StringNode):
+        string = " ".join(node.words)
+        string = Filter.applyFiltersForString(string, self._params)
+        node.words = string.split(" ")
 
 
 @trace
@@ -36,14 +44,14 @@ def prepare_data_set():
     methods = Dumper.json_load(RAW_METHODS)
     with Pool() as pool:
         methods = pool.map(apply, methods)
-        methods = (method for method in methods if method is not None)
+        methods = [method for method in methods if method is not None]
         methods = pool.map(build_batch, batching(methods))
     Dumper.pkl_dump(methods, ANALYSER_METHODS)
 
 
 def apply(method):
     method = parse_contract(method)
-    if len(method["contract"]) <= 1: return None
+    if len(method["contract"]) == 0: return None
     method = simplify_contract(method)
     method = filter_contract_text(method)
     method = index_contract(method)
@@ -61,6 +69,14 @@ def simplify_contract(method):
 def vectorize(method) -> List[int]:
     result = [len(method["java-doc"][label]) for label in PARTS]
     result.append(len(method["contract"]))
+    length = []
+    outputs_steps = len(method["contract"])
+    for label, instructions, strings in method["contract"]:
+        length.append(len(instructions))
+    depth = int(np.ceil(np.log2(max(length))))
+    length = 2 ** depth
+    result.append(outputs_steps)
+    result.append(length)
     return result
 
 
@@ -83,12 +99,11 @@ def batching(methods: Iterable[dict]):
 
 
 def filter_contract_text(method):
-    tree = Parser.tree(method["contract"])
-    filtrator = StringFiltrator(method)
-    filtrator.accept(tree)
-    compiler = AstCompiler()
-    compiler.accept(tree)
-    method["contract"] = compiler.instructions
+    dfs_guide = AstDfsGuide(StringFiltrator(method))
+    bfs_guide = AstBfsGuide(AstCompiler())
+    forest = (Parser.parse_tree(*args) for args in method["contract"])
+    forest = (dfs_guide.accept(tree) for tree in forest)
+    method["contract"] = [bfs_guide.accept(tree) for tree in forest]
     return method
 
 
@@ -99,10 +114,17 @@ def parse_contract(method):
 
 def index_contract(method):
     result = []
-    for instruction in method["contract"]:
-        word_index = WordEmbeddings.get_index(instruction.word)
-        token_index = TokenEmbeddings.get_index(instruction.token.name)
-        result.append((word_index, token_index))
+    for label, instructions, strings in method["contract"]:
+        label = TokenEmbeddings.get_index(label.name)
+        instructions = [
+            TokenEmbeddings.get_index(instruction.token.name)
+            for instruction in instructions
+        ]
+        strings = {
+            idx: [WordEmbeddings.get_index(word) for word in string]
+            for idx, string in strings.items()
+        }
+        result.append((label, instructions, strings))
     method["contract"] = result
     return method
 
@@ -118,35 +140,50 @@ def index_java_doc(method):
 
 
 def build_batch(methods: List[dict]):
-    inputs_steps = {label: np.asarray([len(method["java-doc"][label]) for method in methods]) for label in PARTS}
-    output_steps = np.asarray([len(method["contract"]) for method in methods])
-    inputs_steps = {label: np.max(inputs_steps[label]) for label in PARTS}
-    output_steps = np.max(output_steps)
-
+    inputs_steps = {
+        label: max([len(method["java-doc"][label]) for method in methods])
+        for label in PARTS
+    }
     inputs = {label: [] for label in PARTS}
     inputs_sizes = {label: [] for label in PARTS}
-    word_target = []
-    token_target = []
+    pad_index = WordEmbeddings.get_index(PAD)
     for method in methods:
         for label in PARTS:
-            line = method["java-doc"][label]
+            line = list(method["java-doc"][label])
             inputs_sizes[label].append(len(line))
-            line = list(line) + [WordEmbeddings.get_index(PAD) for _ in range(inputs_steps[label] + 1 - len(line))]
+            expected = inputs_steps[label] + 1 - len(line)
+            line = line + [pad_index] * expected
             inputs[label].append(line)
-        words = []
-        tokens = []
-        for word, token in method["contract"]:
-            words.append(word)
-            tokens.append(token)
-        words += [WordEmbeddings.get_index(PAD) for _ in range(output_steps + 1 - len(words))]
-        tokens += [TokenEmbeddings.get_index(NOP) for _ in range(output_steps + 1 - len(tokens))]
-        word_target.append(words)
-        token_target.append(tokens)
     for label in PARTS:
         inputs[label] = np.transpose(np.asarray(inputs[label]), (1, 0))
-    word_target = np.transpose(np.asarray(word_target), (1, 0))
-    token_target = np.transpose(np.asarray(token_target), (1, 0))
-    return inputs, inputs_sizes, word_target, token_target
+    outputs_steps = []
+    length = []
+    for method in methods:
+        contract = method["contract"]
+        outputs_steps.append(len(contract))
+        for label, instructions, strings in contract:
+            length.append(len(instructions))
+    outputs_steps = max(outputs_steps)
+    depth = int(np.ceil(np.log2(max(length))))
+    length = 2 ** depth - 1
+    outputs = []
+    labels = []
+    nop_index = TokenEmbeddings.get_index(NOP)
+    empty_tree = [nop_index for _ in range(length)]
+    for method in methods:
+        labels.append([])
+        outputs.append([])
+        for label, instructions, strings in method["contract"]:
+            labels[-1].append(label)
+            expected = length - len(instructions)
+            line = instructions + [nop_index] * expected
+            outputs[-1].append(line)
+        expected = outputs_steps - len(outputs[-1])
+        labels[-1].extend([nop_index] * expected)
+        outputs[-1].extend([empty_tree] * expected)
+    labels = np.asarray(labels)
+    outputs = np.asarray(outputs)
+    return inputs, inputs_sizes, labels, outputs, outputs_steps, depth
 
 
 if __name__ == '__main__':
