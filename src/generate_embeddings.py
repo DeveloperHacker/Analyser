@@ -1,9 +1,8 @@
-import logging
-import sys
 from multiprocessing.pool import Pool
 
 import tensorflow as tf
 
+from config import init
 from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
 from constants.paths import *
 from utils import Dumper, Filter, Generator
@@ -81,8 +80,7 @@ def cluster():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, filename=GENERATOR_LOG)
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    init()
     prepare()
-    # generate()
-    # cluster()
+    generate()
+    cluster()

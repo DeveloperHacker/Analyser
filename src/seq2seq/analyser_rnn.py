@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops, array_ops, variable_scope as vs, init_ops
 
 from seq2seq import dynamic_rnn
-from seq2seq.dynamic_rnn import stack_bidirectional_dynamic_rnn, stack_attention_dynamic_rnn
+from seq2seq.dynamic_rnn import stack_attention_dynamic_rnn, stack_bidirectional_dynamic_rnn
 
 # noinspection PyProtectedMember
 _WEIGHTS_NAME = dynamic_rnn._WEIGHTS_NAME
@@ -10,34 +10,26 @@ _WEIGHTS_NAME = dynamic_rnn._WEIGHTS_NAME
 _BIAS_NAME = dynamic_rnn._BIAS_NAME
 
 
-def analyser_rnn(cells_fw,
-                 cells_bw,
-                 inputs: list,
-                 sequence_length: list,
-                 dtype):
-    if len(inputs) != len(sequence_length):
+def sequence_input(cells_fw, cells_bw, inputs: list, sequence_lengths: list, dtype):
+    if len(inputs) != len(sequence_lengths):
         raise ValueError("Number of inputs and inputs lengths must be equals")
     if len(inputs) == 0:
         raise ValueError("Number of inputs must be greater zero")
 
     batch_size = None
-    for _inputs, _sequence_length in zip(inputs, sequence_length):
+    for _inputs, _sequence_lengths in zip(inputs, sequence_lengths):
         _batch_size = _inputs.get_shape()[0].value
         if batch_size is not None and _batch_size != batch_size:
             raise ValueError("Batch sizes for any inputs must be equals")
-        batch_size = _sequence_length.get_shape()[0].value
+        batch_size = _sequence_lengths.get_shape()[0].value
         if _batch_size != batch_size:
             raise ValueError("Batch sizes of Inputs and inputs lengths must be equals")
 
     attention_states = []
-    for i, (_inputs, _lengths) in enumerate(zip(inputs, sequence_length)):
+    for i, (_inputs, _sequence_lengths) in enumerate(zip(inputs, sequence_lengths)):
         with vs.variable_scope("encoder_%d" % i):
             encoder_outputs, states_fw, states_bw = stack_bidirectional_dynamic_rnn(
-                cells_fw,
-                cells_bw,
-                _inputs,
-                sequence_length=_lengths,
-                dtype=dtype)
+                cells_fw, cells_bw, _inputs, sequence_length=_sequence_lengths, dtype=dtype)
             attention_states.append(tf.concat((states_fw[-1], states_bw[-1]), 2))
     return attention_states
 
@@ -51,13 +43,8 @@ def input_projection(inputs, projection_size, dtype):
         input_size = _input_size
 
     with vs.variable_scope("input_projection"):
-        W_enc = vs.get_variable(_WEIGHTS_NAME,
-                                [input_size, projection_size],
-                                dtype)
-        B_enc = vs.get_variable(_BIAS_NAME,
-                                [projection_size],
-                                dtype,
-                                init_ops.constant_initializer(0, dtype))
+        W_enc = vs.get_variable(_WEIGHTS_NAME, [input_size, projection_size], dtype)
+        B_enc = vs.get_variable(_BIAS_NAME, [projection_size], dtype, init_ops.constant_initializer(0, dtype))
         projections = []
         for i, _inputs in enumerate(inputs):
             batch_size = _inputs.get_shape()[0].value
@@ -80,68 +67,73 @@ def analysing_loss(data, variables, l2_loss_weight=0.0001):
             losses.append(data_loss)
         losses = tf.stack(losses)
         l2_loss = l2_loss_weight * tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-        loss = tf.reduce_mean(tf.sqrt(tf.reduce_sum(tf.square(losses), 0) + tf.square(l2_loss)))
+        loss = tf.sqrt(tf.reduce_sum(tf.square(losses), 0) + tf.square(l2_loss))
     return loss
 
 
 def sequence_output(attention_states,
-                    word_cells,
-                    token_cells,
-                    num_words,
-                    num_tokens,
-                    word_size,
-                    token_size,
-                    time_steps,
-                    word_num_heads,
-                    token_num_heads,
+                    root_cells, root_time_steps, root_num_heads,
+                    sequence_cells, sequence_time_steps, sequence_num_heads,
+                    output_size,
                     dtype):
+    if len(sequence_cells) != len(root_cells):
+        raise ValueError("Number of sequence cells and root cells must be equals")
     batch_size = None
     for state in attention_states:
         _batch_size = state.get_shape()[0].value
         if batch_size is not None and _batch_size != batch_size:
             raise ValueError("Batch sizes for any Attention states must be equals")
         batch_size = _batch_size
+    with vs.variable_scope("root_decoder"):
+        root_decoder_inputs = tf.zeros([root_time_steps, batch_size, output_size], dtype)
+        root_decoder_outputs, root_decoder_states = stack_attention_dynamic_rnn(
+            root_cells, root_decoder_inputs, attention_states, output_size, root_num_heads, dtype=dtype)
+        roots = root_decoder_states[-1]
+        num_roots = roots.get_shape()[0].value
+        if num_roots is None:
+            num_roots = array_ops.shape(roots)[0]
+        root_decoder_states = tf.transpose(tf.stack(root_decoder_states), [1, 0, 2, 3])
+    with vs.variable_scope("sequence_decoder"):
+        time_steps = sequence_time_steps + 1
+        with vs.variable_scope("Arrays"):
+            outputs_ta = tf.TensorArray(
+                dtype,
+                size=num_roots,
+                tensor_array_name="outputs",
+                clear_after_read=False)
+            states_ta = tf.TensorArray(
+                dtype,
+                size=num_roots,
+                tensor_array_name="states",
+                clear_after_read=False)
 
-    with vs.variable_scope("word_decoder"):
-        decoder_inputs = tf.zeros([time_steps, batch_size, word_size], dtype, "decoder_inputs")
-        decoder_outputs, decoder_states = stack_attention_dynamic_rnn(
-            word_cells,
-            decoder_inputs,
-            attention_states,
-            word_size,
-            word_num_heads,
-            dtype=dtype)
-    with vs.variable_scope("word_softmax"):
-        W_sft = vs.get_variable(_WEIGHTS_NAME, [word_size, num_words], dtype)
-        B_sft = vs.get_variable(_BIAS_NAME, [num_words], dtype, init_ops.constant_initializer(0, dtype))
-        word_logits = tf.reshape(decoder_outputs, [time_steps * batch_size, word_size])
-        word_logits = word_logits @ W_sft + B_sft
-        word_outputs = tf.nn.softmax(word_logits, 1)
-        word_logits = tf.reshape(word_logits, [time_steps, batch_size, num_words])
-        word_outputs = tf.reshape(word_outputs, [time_steps, batch_size, num_words])
-        word_logits = tf.transpose(word_logits, [1, 0, 2])
-        word_outputs = tf.transpose(word_outputs, [1, 0, 2])
-    with vs.variable_scope("token_decoder"):
-        decoder_outputs, decoder_states = stack_attention_dynamic_rnn(
-            token_cells,
-            decoder_outputs,
-            attention_states,
-            token_size,
-            token_num_heads,
-            use_inputs=True,
-            dtype=dtype)
-    with vs.variable_scope("token_softmax"):
-        W_sft = vs.get_variable(_WEIGHTS_NAME, [token_size, num_tokens], dtype)
-        B_sft = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, init_ops.constant_initializer(0, dtype))
-        token_logits = tf.reshape(decoder_outputs, [time_steps * batch_size, token_size])
-        token_logits = token_logits @ W_sft + B_sft
-        token_outputs = tf.nn.softmax(token_logits, 1)
-        token_outputs = tf.reshape(token_outputs, [time_steps, batch_size, num_tokens])
-        token_logits = tf.reshape(token_logits, [time_steps, batch_size, num_tokens])
-        token_outputs = tf.reshape(token_outputs, [time_steps, batch_size, num_tokens])
-        token_logits = tf.transpose(token_logits, [1, 0, 2])
-        token_outputs = tf.transpose(token_outputs, [1, 0, 2])
-    return word_logits, word_outputs, token_logits, token_outputs
+        def _time_step(time, _outputs_ta, _states_ta):
+            sequence_decoder_inputs = tf.zeros([time_steps, batch_size, output_size], dtype)
+            initial_states = tf.unstack(tf.gather(root_decoder_states, time))
+            sequence_decoder_outputs, sequence_decoder_states = stack_attention_dynamic_rnn(
+                sequence_cells,
+                sequence_decoder_inputs,
+                attention_states,
+                output_size,
+                sequence_num_heads,
+                initial_states=initial_states,
+                dtype=dtype)
+            _outputs_ta = _outputs_ta.write(time, sequence_decoder_outputs[-1])
+            _states_ta = _states_ta.write(time, sequence_decoder_states[-1])
+            return time + 1, _outputs_ta, _states_ta
+
+        _, outputs_ta, states_ta = control_flow_ops.while_loop(
+            cond=lambda _time, *_: _time < num_roots, body=_time_step, loop_vars=(0, outputs_ta, states_ta))
+
+        with vs.variable_scope("OutputProjection"):
+            outputs_logits = outputs_ta.stack()
+            outputs_logits = tf.reshape(outputs_logits, [time_steps * num_roots * batch_size, output_size])
+            outputs = tf.nn.softmax(outputs_logits, 1)
+            outputs_logits = tf.reshape(outputs_logits, [time_steps, num_roots, batch_size, output_size])
+            outputs = tf.reshape(outputs, [time_steps, num_roots, batch_size, output_size])
+        outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
+        outputs = tf.transpose(outputs, [2, 1, 0, 3])
+    return outputs_logits, outputs
 
 
 def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, num_tokens, tree_height, dtype):
@@ -153,7 +145,7 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
         batch_size = _batch_size
 
     with vs.variable_scope("root_decoder"):
-        root_decoder_inputs = tf.zeros([root_time_steps, batch_size, num_tokens], dtype, "root_decoder_inputs")
+        root_decoder_inputs = tf.zeros([root_time_steps, batch_size, num_tokens], dtype)
         root_decoder_outputs, root_decoder_states = stack_attention_dynamic_rnn(
             root_cells,
             root_decoder_inputs,
@@ -171,16 +163,16 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
 
     with vs.variable_scope("tree_decoder"):
         bias_initializer = init_ops.constant_initializer(0, dtype)
-        with vs.variable_scope("TreeLabelProjection"):
+        with vs.variable_scope("LabelProjectionVariables"):
             W_lbl = vs.get_variable(_WEIGHTS_NAME, [num_tokens, num_tokens], dtype)
             B_lbl = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
-        with vs.variable_scope("TreeOutputProjection"):
+        with vs.variable_scope("OutputProjectionVariables"):
             W_out = vs.get_variable(_WEIGHTS_NAME, [state_size, num_tokens], dtype)
             B_out = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
-        with vs.variable_scope("TreeLeftStateProjection"):
+        with vs.variable_scope("LeftStateProjectionVariables"):
             W_left = vs.get_variable(_WEIGHTS_NAME, [state_size, state_size], dtype)
             B_left = vs.get_variable(_BIAS_NAME, [state_size], dtype, bias_initializer)
-        with vs.variable_scope("TreeRightStateProjection"):
+        with vs.variable_scope("RightStateProjectionVariables"):
             W_right = vs.get_variable(_WEIGHTS_NAME, [state_size, state_size], dtype)
             B_right = vs.get_variable(_BIAS_NAME, [state_size], dtype, bias_initializer)
         with vs.variable_scope("Arrays"):
@@ -206,15 +198,12 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
         loop_condition = lambda _time, *_: _time < num_loops
         states_ta = states_ta.write(0, roots)
         _, _, states_ta = control_flow_ops.while_loop(loop_condition, _time_step, (0, 1, states_ta))
-
         with vs.variable_scope("LabelProjection"):
             labels = tf.reshape(labels, [num_roots * batch_size, num_tokens])
             labels_logits = labels @ W_lbl + B_lbl
             labels = tf.nn.softmax(labels_logits, 1)
-            labels_logits = tf.reshape(labels_logits, [num_roots, batch_size, num_tokens])
-            labels = tf.reshape(labels, [num_roots, batch_size, num_tokens])
-            labels_logits = tf.transpose(labels_logits, [1, 0, 2])
-            labels = tf.transpose(labels, [1, 0, 2])
+            labels_logits = tf.reshape(labels_logits, [1, num_roots, batch_size, num_tokens])
+            labels = tf.reshape(labels, [1, num_roots, batch_size, num_tokens])
         with vs.variable_scope("OutputProjection"):
             states = states_ta.stack()
             states = tf.reshape(states, [states_ta_size * num_roots * batch_size, state_size])
@@ -222,32 +211,8 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
             outputs = tf.nn.softmax(outputs_logits, 1)
             outputs_logits = tf.reshape(outputs_logits, [states_ta_size, num_roots, batch_size, num_tokens])
             outputs = tf.reshape(outputs, [states_ta_size, num_roots, batch_size, num_tokens])
-            outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
-            outputs = tf.transpose(outputs, [2, 1, 0, 3])
-    return labels_logits, labels, outputs_logits, outputs
-
-
-def main():
-    attention_states = [tf.random_normal([11, 217, 233]) for _ in range(6)]
-    from tensorflow.python.ops.rnn_cell_impl import GRUCell
-    root_cells = [GRUCell(123) for _ in range(3)]
-    root_time_steps = 10
-    root_num_heads = 4
-    num_tokens = 333
-    tree_height = 5
-    dtype = tf.float32
-    out = tree_output(attention_states,
-                      root_cells,
-                      root_time_steps,
-                      root_num_heads,
-                      num_tokens,
-                      tree_height,
-                      dtype)
-    with tf.Session() as dssa:
-        dssa.run(tf.global_variables_initializer())
-        outs = dssa.run([out])
-        print(outs)
-
-
-if __name__ == '__main__':
-    main()
+        outputs_logits = tf.concat((labels_logits, outputs_logits), 0)
+        outputs = tf.concat((labels, outputs), 0)
+        outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
+        outputs = tf.transpose(outputs, [2, 1, 0, 3])
+    return outputs_logits, outputs

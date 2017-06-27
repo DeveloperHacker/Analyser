@@ -96,8 +96,6 @@ def filterMeaninglessSentences(string: str) -> str:
             words = [word for word in sentence.split(" ") if len(word) > 0]
             if (Filter.wordsNumber(words) / len(words)) > NORMAL_CONCENTRATION_OF_WORDS:
                 text.append(sentence)
-            else:
-                print(sentence)
             sentence = []
     return "".join(text)
 

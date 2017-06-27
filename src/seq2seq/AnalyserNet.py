@@ -1,3 +1,5 @@
+import itertools
+import os
 import random
 import time
 
@@ -8,11 +10,11 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.rnn_cell_impl import GRUCell
 
 from constants.analyser import *
-from constants.embeddings import WordEmbeddings, NUM_TOKENS, TokenEmbeddings
+from constants.embeddings import WordEmbeddings, TokenEmbeddings, NUM_TOKENS, PAD
 from constants.paths import RESOURCES, ANALYSER, ANALYSER_METHODS
-from constants.tags import PARTS
+from constants.tags import PARTS, NEXT
 from seq2seq.Net import Net
-from seq2seq.analyser_rnn import analyser_rnn, input_projection, tree_output, analysing_loss
+from seq2seq.analyser_rnn import sequence_input, input_projection, analysing_loss, sequence_output, tree_output
 from utils import Dumper
 from utils.Formatter import Formatter
 from utils.wrapper import trace
@@ -33,34 +35,41 @@ class AnalyserNet(Net):
                     self.embeddings.append(tf.gather(embeddings, indexes))
                     self.inputs.append(indexes)
                     self.inputs_sizes.append(tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes"))
-            self.decoder_time_steps = tf.placeholder(tf.int32, [], "time_steps")
+            self.root_time_steps = tf.placeholder(tf.int32, [], "root_time_steps")
+            self.output_time_steps = tf.placeholder(tf.int32, [], "output_time_steps")
             self.depth = tf.placeholder(tf.int32, [], "depth")
             cells_fw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
             cells_bw = [GRUCell(ENCODER_STATE_SIZE) for _ in range(NUM_ENCODERS)]
-            cells = [GRUCell(WORD_STATE_SIZE) for _ in range(NUM_DECODERS)]
+            root_cells = [GRUCell(ROOT_STATE_SIZE) for _ in range(NUM_DECODERS)]
+            sequence_cells = [GRUCell(SEQUENCE_STATE_SIZE) for _ in range(NUM_DECODERS)]
             projection = input_projection(self.embeddings, INPUT_SIZE, tf.float32)
-            with vs.variable_scope("analyser_rnn"):
-                attention_states = analyser_rnn(
-                    cells_bw,
-                    cells_fw,
-                    projection,
-                    self.inputs_sizes,
-                    tf.float32)
-                self.labels_logits, self.labels, self.outputs_logits, self.outputs = tree_output(
+            attention_states = sequence_input(cells_bw, cells_fw, projection, self.inputs_sizes, tf.float32)
+            output_type = os.environ['OUTPUT_TYPE']
+            if output_type == "tree":
+                self.outputs_logits, self.outputs = tree_output(
                     attention_states,
-                    cells,
-                    self.decoder_time_steps,
-                    NUM_HEADS,
+                    root_cells,
+                    self.root_time_steps,
+                    ROOT_NUM_HEADS,
                     NUM_TOKENS,
                     self.depth,
                     tf.float32)
-            self.top_labels = tf.nn.top_k(self.labels, TOP)
+            elif output_type in ("bfs_sequence", "dfs_sequence"):
+                self.outputs_logits, self.outputs = sequence_output(
+                    attention_states,
+                    root_cells,
+                    self.root_time_steps,
+                    ROOT_NUM_HEADS,
+                    sequence_cells,
+                    self.output_time_steps,
+                    SEQUENCE_NUM_HEADS,
+                    NUM_TOKENS,
+                    tf.float32)
             self.top_outputs = tf.nn.top_k(self.outputs, TOP)
-            self.labels_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None], "labels_targets")
             self.outputs_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None], "outputs_targets")
             self.scope = vs.get_variable_scope().name
-            data = ((self.labels_targets, self.labels_logits), (self.outputs_targets, self.outputs_logits))
-            self.loss = analysing_loss(data, self.get_variables())
+            self.losses = analysing_loss(((self.outputs_targets, self.outputs_logits),), self.get_variables())
+            self.loss = tf.reduce_mean(self.losses)
         self.optimizer = tf.train.AdamOptimizer().minimize(self.loss)
         self.data_set = Dumper.pkl_load(ANALYSER_METHODS)
 
@@ -93,14 +102,76 @@ class AnalyserNet(Net):
 
     def build_feed_dict(self, batch) -> dict:
         feed_dict = {}
-        inputs, inputs_sizes, labels, outputs, steps, depth = batch
+        inputs, inputs_sizes, outputs, root_time_steps, output_time_steps, depth = batch
         for i, label in enumerate(PARTS):
             feed_dict[self.inputs[i]] = np.asarray(inputs[label]).T
             feed_dict[self.inputs_sizes[i]] = inputs_sizes[label]
-        feed_dict[self.decoder_time_steps] = steps
+        feed_dict[self.root_time_steps] = root_time_steps
+        feed_dict[self.output_time_steps] = output_time_steps
         feed_dict[self.depth] = depth
-        feed_dict[self.labels_targets] = labels
         feed_dict[self.outputs_targets] = outputs
+        return feed_dict
+
+    def correct_target(self, feed_dict, outputs) -> dict:
+        # return self.nearest_correct(feed_dict, outputs, 0.5)
+        return self.greedy_correct(feed_dict, outputs)
+
+    def nearest_correct(self, feed_dict, outputs, fine_weigh):
+        outputs_targets = feed_dict[self.outputs_targets]
+        embeddings = np.asarray(TokenEmbeddings.idx2emb())
+        outputs_targets_values = embeddings[outputs_targets]
+        result = []
+        for i in range(len(outputs)):
+            output = outputs[i]
+            output_target = outputs_targets[i]
+            output_target_values = outputs_targets_values[i]
+            best = None
+            best_distance = None
+            default_indexes = np.asarray(list(range(len(output_target))))
+            for indexes in itertools.permutations(default_indexes):
+                perm = output_target_values[list(indexes)]
+                distance = np.linalg.norm(perm[1:] - output[1:])
+                fine = fine_weigh * np.linalg.norm(default_indexes - indexes)
+                distance = distance + fine
+                if best_distance is None or distance < best_distance:
+                    best = output_target[list(indexes)]
+                    best_distance = distance
+            result.append(best)
+        feed_dict[self.outputs_targets] = np.asarray(result)
+        return feed_dict
+
+    def greedy_correct(self, feed_dict, outputs):
+        outputs_targets = feed_dict[self.outputs_targets]
+        embeddings = np.asarray(TokenEmbeddings.idx2emb())
+        outputs_targets_values = embeddings[outputs_targets]
+        result = []
+        for i in range(len(outputs)):
+            output = outputs[i]
+            output_target = outputs_targets[i]
+            output_target_values = outputs_targets_values[i]
+            from_indexes = list(range(len(output_target)))
+            to_indexes = list(range(len(output)))
+            _result = [None] * len(output)
+            while len(from_indexes) > 0:
+                index_best_from_index = None
+                index_best_to_index = None
+                best_distance = None
+                for i, from_index in enumerate(from_indexes):
+                    for j, to_index in enumerate(to_indexes):
+                        from_output = output_target_values[from_index]
+                        to_output = output[to_index]
+                        distance = np.linalg.norm(from_output[1:] - to_output[1:])
+                        if best_distance is None or distance < best_distance:
+                            index_best_from_index = i
+                            index_best_to_index = j
+                            best_distance = distance
+                best_from_index = from_indexes[index_best_from_index]
+                best_to_index = to_indexes[index_best_to_index]
+                del from_indexes[index_best_from_index]
+                del to_indexes[index_best_to_index]
+                _result[best_to_index] = output_target[best_from_index]
+            result.append(_result)
+        feed_dict[self.outputs_targets] = np.asarray(result)
         return feed_dict
 
     @trace
@@ -130,14 +201,20 @@ class AnalyserNet(Net):
                 train_set, validation_set, test_set = self.get_data_set()
                 for batch in train_set:
                     feed_dict = self.build_feed_dict(batch)
+                    outputs = session.run(self.outputs, feed_dict)
+                    feed_dict = self.correct_target(feed_dict, outputs)
                     session.run(self.optimizer, feed_dict)
                 train_losses = []
                 for batch in train_set:
                     feed_dict = self.build_feed_dict(batch)
+                    outputs = session.run(self.outputs, feed_dict)
+                    feed_dict = self.correct_target(feed_dict, outputs)
                     train_losses.append(session.run(self.loss, feed_dict))
                 validation_losses = []
                 for batch in validation_set:
                     feed_dict = self.build_feed_dict(batch)
+                    outputs = session.run(self.outputs, feed_dict)
+                    feed_dict = self.correct_target(feed_dict, outputs)
                     validation_losses.append(session.run(self.loss, feed_dict))
                 stop = time.time()
                 delay = stop - start
@@ -159,18 +236,9 @@ class AnalyserNet(Net):
     @trace
     def test(self):
         formatter = Formatter(
-            heads=(
-                "loss",
-                "target",
-                *(["output", "prob"] * TOP)),
-            formats=(
-                ".4f",
-                "s",
-                *(["s", ".4f"] * TOP)),
-            sizes=(
-                12,
-                20,
-                *([20, 12] * TOP)),
+            heads=("loss", "target", *(["output", "prob"] * TOP)),
+            formats=(".4f", "s", *(["s", ".4f"] * TOP)),
+            sizes=(12, 20, *([20, 12] * TOP)),
             rows=range(2 + 2 * TOP))
         with tf.Session() as session, tf.device('/cpu:0'):
             self.reset(session)
@@ -178,36 +246,23 @@ class AnalyserNet(Net):
             train_set, validation_set, test_set = self.get_data_set()
             for batch in test_set:
                 feed_dict = self.build_feed_dict(batch)
-                fetches = (
-                    self.loss,
-                    self.labels_targets,
-                    self.top_labels,
-                    self.outputs_targets,
-                    self.top_outputs,
-                    self.inputs)
-                loss, labels_targets, top_labels, outputs_targets, top_outputs, inputs = session.run(fetches, feed_dict)
-                top_labels_indexes = top_labels.indices
-                top_labels_probs = top_labels.values
+                outputs = session.run(self.outputs, feed_dict)
+                feed_dict = self.correct_target(feed_dict, outputs)
+                fetches = (self.losses, self.outputs_targets, self.top_outputs, self.inputs)
+                ls, outputs_targets, top_outputs, inputs = session.run(fetches, feed_dict)
                 top_outputs_indexes = top_outputs.indices
                 top_outputs_probs = top_outputs.values
-                for lt, tli, tlp, ot, toi, top, *inps in zip(
-                        labels_targets,
-                        top_labels_indexes,
-                        top_labels_probs,
-                        outputs_targets,
-                        top_outputs_indexes,
-                        top_outputs_probs,
-                        *inputs):
+                for l, ot, toi, top, *inps in zip(ls, outputs_targets, top_outputs_indexes, top_outputs_probs, *inputs):
                     formatter.print_head()
-                    for lt_i, tli_i, tlp_i, ot_i, toi_i, top_i in zip(lt, tli, tlp, ot, toi, top):
-                        lt_i = TokenEmbeddings.get_token(int(lt_i))
-                        tli_i = (TokenEmbeddings.get_token(int(i)) for i in tli_i)
-                        formatter.print(loss, lt_i, *(elem for pair in zip(tli_i, tlp_i) for elem in pair))
+                    for ot_i, toi_i, top_i in zip(ot, toi, top):
                         for ot_ij, toi_ij, top_ij in zip(ot_i, toi_i, top_i):
                             ot_ij = TokenEmbeddings.get_token(int(ot_ij))
                             toi_ij = (TokenEmbeddings.get_token(int(i)) for i in toi_ij)
-                            formatter.print(loss, ot_ij, *(elem for pair in zip(toi_ij, top_ij) for elem in pair))
+                            formatter.print(l, ot_ij, *(elem for pair in zip(toi_ij, top_ij) for elem in pair))
                         formatter.print_delimiter()
                     for inp, label in zip(inps, PARTS):
                         line = " ".join(WordEmbeddings.get_word(int(i)) for i in inp)
-                        formatter.print_appendix("{:10s} {} {}".format(label, formatter.vd, line))
+                        lines = (line.strip() for line in line.replace(PAD, " ").split(NEXT))
+                        text = "\n".join(line for line in lines if len(line) > 0)
+                        formatter.print_appendix(text, label)
+                    formatter.print_lower_delimiter()

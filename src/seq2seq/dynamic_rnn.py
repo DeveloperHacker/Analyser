@@ -370,7 +370,7 @@ def dynamic_rnn(cell, inputs, sequence_length=None, initial_state=None,
             final_states = nest.pack_sequence_as(
                 structure=final_states, flat_sequence=flat_states)
 
-        return outputs, final_states
+    return outputs, final_states
 
 
 def _dynamic_rnn_loop(cell,
@@ -596,7 +596,7 @@ def attention_dynamic_rnn(
           and then we calculate the output:
             output = linear(cell_output, new_attn).
         state: The state of each decoder cell the final time-step.
-          It is a 2D Tensor of shape [batch_size x cell.state_size].
+          It is a 2D Tensor of shape [sequence_length x batch_size x cell.state_size].
 
     Raises:
       ValueError: when num_heads is not positive, there are no inputs, shapes
@@ -825,11 +825,11 @@ def stack_bidirectional_dynamic_rnn(cells_fw,
                     cell_fw,
                     cell_bw,
                     prev_outputs,
-                    initial_state_fw=initial_state_fw,
-                    initial_state_bw=initial_state_bw,
-                    sequence_length=sequence_length,
-                    parallel_iterations=parallel_iterations,
-                    dtype=dtype)
+                    sequence_length,
+                    initial_state_fw,
+                    initial_state_bw,
+                    dtype,
+                    parallel_iterations)
                 # Concat the outputs to create the new input.
                 prev_outputs = array_ops.concat(outputs, 2)
             res_states_fw.append(states_fw)
@@ -853,8 +853,7 @@ def stack_attention_dynamic_rnn(cells,
     Args:
       cells: List of instances of RNNCell, one per layer,
         to be used for forward direction.
-      inputs: The RNN inputs. this must be a tensor of shape:
-        `[batch_size, max_time, ...]`, or a nested tuple of such elements.
+      inputs: A 3D Tensors [sequence_length x batch_size x input_size].
       attention_states: ...
       output_size: ...
       num_heads: ...
@@ -872,10 +871,7 @@ def stack_attention_dynamic_rnn(cells,
         outputs: Output `Tensor` shaped:
           `batch_size, max_time, layers_output]`. Where layers_output
           are depth-concatenated forward and backward outputs.
-        output_states_fw is the final states, one tensor per layer,
-          of the forward rnn.
-        output_states_bw is the final states, one tensor per layer,
-          of the backward rnn.
+        output_states is the final states, one tensor per layer.
     Raises:
       TypeError: If `cell` is not an instance of `RNNCell`.
       ValueError: If inputs is `None`.
@@ -896,6 +892,7 @@ def stack_attention_dynamic_rnn(cells,
         def loop_function(prev, _):
             return nn_ops.relu(prev @ W_loop + B_loop)
 
+    res_outputs = []
     res_states = []
     prev_outputs = inputs
 
@@ -915,6 +912,7 @@ def stack_attention_dynamic_rnn(cells,
                     loop_function,
                     dtype)
             loop_function = None
+            res_outputs.append(prev_outputs)
             res_states.append(states)
 
-    return prev_outputs, tuple(res_states)
+    return tuple(res_outputs), tuple(res_states)

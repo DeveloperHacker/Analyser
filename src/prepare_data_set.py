@@ -1,5 +1,4 @@
-import logging
-import sys
+import os
 from multiprocessing.pool import Pool
 from typing import List, Any, Iterable
 
@@ -12,9 +11,10 @@ from contracts.parser.Parser import Parser
 from contracts.visitors.AstCompiler import AstCompiler
 from contracts.visitors.AstVisitor import AstVisitor
 
+from config import init
 from constants.analyser import BATCH_SIZE
 from constants.embeddings import WordEmbeddings, TokenEmbeddings, PAD, NOP
-from constants.paths import ANALYSER_PREPARE_DATA_SET_LOG, ANALYSER_METHODS, RAW_METHODS
+from constants.paths import ANALYSER_METHODS, RAW_METHODS
 from constants.tags import PARTS
 from generate_embeddings import join_java_doc, empty
 from utils import Filter, Dumper
@@ -67,14 +67,20 @@ def simplify_contract(method):
 
 
 def vectorize(method) -> List[int]:
-    result = [len(method["java-doc"][label]) for label in PARTS]
-    result.append(len(method["contract"]))
+    result = []
+    # result.extend(len(method["java-doc"][label]) for label in PARTS)
+    # result.append(len(method["contract"]))
     length = []
     outputs_steps = len(method["contract"])
     for label, instructions, strings in method["contract"]:
         length.append(len(instructions))
-    depth = int(np.ceil(np.log2(max(length))))
-    length = 2 ** depth
+    length = max(length)
+    depth = int(np.ceil(np.log2(length)))
+    output_type = os.environ['OUTPUT_TYPE']
+    if output_type == "tree":
+        length = 2 ** depth
+    elif output_type in ("bfs_sequence", "dfs_sequence"):
+        length += 1
     result.append(outputs_steps)
     result.append(length)
     return result
@@ -100,10 +106,14 @@ def batching(methods: Iterable[dict]):
 
 def filter_contract_text(method):
     dfs_guide = AstDfsGuide(StringFiltrator(method))
-    bfs_guide = AstBfsGuide(AstCompiler())
+    output_type = os.environ['OUTPUT_TYPE']
+    if output_type in ("tree", "bfs_sequence"):
+        compile_guide = AstBfsGuide(AstCompiler())
+    elif output_type == "dfs_sequence":
+        compile_guide = AstDfsGuide(AstCompiler())
     forest = (Parser.parse_tree(*args) for args in method["contract"])
     forest = (dfs_guide.accept(tree) for tree in forest)
-    method["contract"] = [bfs_guide.accept(tree) for tree in forest]
+    method["contract"] = [compile_guide.accept(tree) for tree in forest]
     return method
 
 
@@ -156,37 +166,36 @@ def build_batch(methods: List[dict]):
             inputs[label].append(line)
     for label in PARTS:
         inputs[label] = np.transpose(np.asarray(inputs[label]), (1, 0))
-    outputs_steps = []
-    length = []
+    root_time_steps = []
+    output_time_steps = []
     for method in methods:
         contract = method["contract"]
-        outputs_steps.append(len(contract))
+        root_time_steps.append(len(contract))
         for label, instructions, strings in contract:
-            length.append(len(instructions))
-    outputs_steps = max(outputs_steps)
-    depth = int(np.ceil(np.log2(max(length))))
-    length = 2 ** depth - 1
+            output_time_steps.append(len(instructions))
+    root_time_steps = max(root_time_steps)
+    output_time_steps = max(output_time_steps)
+    depth = int(np.ceil(np.log2(output_time_steps)))
+    output_type = os.environ['OUTPUT_TYPE']
+    if output_type == "tree":
+        output_time_steps = 2 ** depth - 1
+    elif output_type in ("bfs_sequence", "dfs_sequence"):
+        output_time_steps += 1
     outputs = []
-    labels = []
     nop_index = TokenEmbeddings.get_index(NOP)
-    empty_tree = [nop_index for _ in range(length)]
+    empty_sequence = [nop_index for _ in range(output_time_steps + 1)]
     for method in methods:
-        labels.append([])
         outputs.append([])
         for label, instructions, strings in method["contract"]:
-            labels[-1].append(label)
-            expected = length - len(instructions)
-            line = instructions + [nop_index] * expected
+            expected = output_time_steps - len(instructions)
+            line = [label] + instructions + [nop_index] * expected
             outputs[-1].append(line)
-        expected = outputs_steps - len(outputs[-1])
-        labels[-1].extend([nop_index] * expected)
-        outputs[-1].extend([empty_tree] * expected)
-    labels = np.asarray(labels)
+        expected = root_time_steps - len(outputs[-1])
+        outputs[-1].extend([empty_sequence] * expected)
     outputs = np.asarray(outputs)
-    return inputs, inputs_sizes, labels, outputs, outputs_steps, depth
+    return inputs, inputs_sizes, outputs, root_time_steps, output_time_steps, depth
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, filename=ANALYSER_PREPARE_DATA_SET_LOG)
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    init()
     prepare_data_set()
