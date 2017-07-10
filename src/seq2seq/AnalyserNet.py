@@ -68,7 +68,7 @@ class AnalyserNet(Net):
             self.top_outputs = tf.nn.top_k(self.outputs, TOP)
             self.outputs_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None], "outputs_targets")
             self.scope = vs.get_variable_scope().name
-            self.losses = analysing_loss(((self.outputs_targets, self.outputs_logits),), self.get_variables())
+            self.losses = analysing_loss(self.outputs_targets, self.outputs_logits, self.get_variables())
             self.loss = tf.reduce_mean(self.losses)
         self.optimizer = tf.train.AdamOptimizer().minimize(self.loss)
         self.data_set = Dumper.pkl_load(ANALYSER_METHODS)
@@ -156,14 +156,14 @@ class AnalyserNet(Net):
                 index_best_from_index = None
                 index_best_to_index = None
                 best_distance = None
-                for i, from_index in enumerate(from_indexes):
-                    for j, to_index in enumerate(to_indexes):
+                for j, from_index in enumerate(from_indexes):
+                    for k, to_index in enumerate(to_indexes):
                         from_output = output_target_values[from_index]
                         to_output = output[to_index]
                         distance = np.linalg.norm(from_output[1:] - to_output[1:])
                         if best_distance is None or distance < best_distance:
-                            index_best_from_index = i
-                            index_best_to_index = j
+                            index_best_from_index = j
+                            index_best_to_index = k
                             best_distance = distance
                 best_from_index = from_indexes[index_best_from_index]
                 best_to_index = to_indexes[index_best_to_index]
@@ -180,7 +180,7 @@ class AnalyserNet(Net):
 
     @trace
     def train(self):
-        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]  # suppress dummy warning hack
+        del tf.get_collection_ref('LAYER_NAME_UIDS')[0]  # suppress dummy warning, hack
 
         formatter = Formatter(
             heads=("epoch", "time", "train", "validation"),

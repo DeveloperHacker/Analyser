@@ -1,4 +1,6 @@
 import os
+import random
+from multiprocessing import Value
 from multiprocessing.pool import Pool
 from typing import List, Any, Iterable
 
@@ -7,17 +9,21 @@ from contracts.guides.AstBfsGuide import AstBfsGuide
 from contracts.guides.AstDfsGuide import AstDfsGuide
 from contracts.nodes.Ast import Ast
 from contracts.nodes.StringNode import StringNode
-from contracts.parser.Parser import Parser
+from contracts.parser import Parser
+from contracts.tokens import tokens
+from contracts.tokens.Token import Token
 from contracts.visitors.AstCompiler import AstCompiler
+from contracts.visitors.AstEqualReducer import AstEqualReducer
 from contracts.visitors.AstVisitor import AstVisitor
 
 from config import init
-from constants.analyser import BATCH_SIZE
+from constants.analyser import BATCH_SIZE, SEED
 from constants.embeddings import WordEmbeddings, TokenEmbeddings, PAD, NOP
-from constants.paths import ANALYSER_METHODS, RAW_METHODS
+from constants.paths import ANALYSER_METHODS, JODA_TIME_METHODS
 from constants.tags import PARTS
 from generate_embeddings import join_java_doc, empty
 from utils import Filter, Dumper
+from utils.Formatter import Formatter
 from utils.wrapper import trace
 
 
@@ -39,30 +45,97 @@ class StringFiltrator(AstVisitor):
         node.words = string.split(" ")
 
 
+class Statistic:
+    def __init__(self):
+        self.tokens_counters = {token: Value("i", 0) for token in tokens.instances()}
+        self.num_raw_methods = None
+        self.num_methods = None
+        self.num_batches = None
+
+    def count(self, token: Token):
+        counter = self.tokens_counters[token.name]
+        with counter.get_lock():
+            counter.value += 1
+
+    def num_tokens(self) -> int:
+        return sum(counter.value for counter in self.tokens_counters.values())
+
+    def show(self):
+        method_concentration = self.num_methods / self.num_raw_methods * 100
+        num_tokens = self.num_tokens()
+        values = []
+        for token_name, counter in self.tokens_counters.items():
+            number = counter.value
+            concentration = number / num_tokens * 100
+            values.append((token_name, number, concentration))
+        values = sorted(values, key=lambda x: x[1], reverse=True)
+        formatter = Formatter(("Name", "Number", "Concentration"), ("s", "d", "s"), (20, 20, 20), (0, 1, 2))
+        formatter.print_head()
+        formatter.print("raw methods", self.num_raw_methods, "")
+        formatter.print("methods", self.num_methods, "%.1f%%" % method_concentration)
+        formatter.print("batches", self.num_batches, "")
+        formatter.print("tokens", num_tokens, "")
+        formatter.print_delimiter()
+        for token_name, number, concentration in values:
+            formatter.print(token_name, number, "%.1f%%" % concentration)
+        formatter.print_lower_delimiter()
+
+
+statistic = Statistic()
+
+
 @trace
 def prepare_data_set():
-    methods = Dumper.json_load(RAW_METHODS)
+    methods = Dumper.json_load(JODA_TIME_METHODS)
+    statistic.num_raw_methods = len(methods)
     with Pool() as pool:
         methods = pool.map(apply, methods)
         methods = [method for method in methods if method is not None]
+        statistic.num_methods = len(methods)
         methods = pool.map(build_batch, batching(methods))
+        statistic.num_batches = len(methods)
+    random.shuffle(methods, lambda: random.Random(SEED).uniform(0, 1))
     Dumper.pkl_dump(methods, ANALYSER_METHODS)
+    statistic.show()
 
 
 def apply(method):
-    method = parse_contract(method)
-    if len(method["contract"]) == 0: return None
-    method = simplify_contract(method)
-    method = filter_contract_text(method)
-    method = index_contract(method)
-    method = Filter.apply(method)
-    if empty(method): return None
-    method = join_java_doc(method)
-    method = index_java_doc(method)
+    try:
+        method = parse_contract(method)
+        if len(method["contract"]) == 0: return None
+        method = filter_contract(method)
+        if len(method["contract"]) == 0: return None
+        method = standardify_contract(method)
+        method = filter_contract_text(method)
+        method = index_contract(method)
+        method = Filter.apply(method)
+        if empty(method): return None
+        method = join_java_doc(method)
+        method = index_java_doc(method)
+    except Exception:
+        raise ValueError()
     return method
 
 
-def simplify_contract(method):
+def standardify_contract(method):
+    reducer = AstDfsGuide(AstEqualReducer())
+    compiler = AstDfsGuide(AstCompiler())
+    forest = (Parser.parse_tree(*args) for args in method["contract"])
+    forest = (reducer.accept(tree) for tree in forest)
+    method["contract"] = [compiler.accept(tree) for tree in forest]
+    return method
+
+
+def filter_contract(method):
+    new_tokens = {tokens.POST_THIS.name, tokens.PRE_THIS.name, tokens.THIS.name, tokens.GET.name}
+    contract = []
+    for label, instructions, strings in method["contract"]:
+        instructions_names = set(instruction.token.name for instruction in instructions)
+        intersection = instructions_names & new_tokens
+        # if tokens.NULL.name in instructions_names:
+        if len(intersection) == 0:
+            contract.append((label, instructions, strings))
+    method["contract"] = contract
     return method
 
 
@@ -105,20 +178,25 @@ def batching(methods: Iterable[dict]):
 
 
 def filter_contract_text(method):
-    dfs_guide = AstDfsGuide(StringFiltrator(method))
+    filtrator = AstDfsGuide(StringFiltrator(method))
     output_type = os.environ['OUTPUT_TYPE']
     if output_type in ("tree", "bfs_sequence"):
-        compile_guide = AstBfsGuide(AstCompiler())
+        compiler = AstBfsGuide(AstCompiler())
     elif output_type == "dfs_sequence":
-        compile_guide = AstDfsGuide(AstCompiler())
+        compiler = AstDfsGuide(AstCompiler())
     forest = (Parser.parse_tree(*args) for args in method["contract"])
-    forest = (dfs_guide.accept(tree) for tree in forest)
-    method["contract"] = [compile_guide.accept(tree) for tree in forest]
+    forest = (filtrator.accept(tree) for tree in forest)
+    method["contract"] = [compiler.accept(tree) for tree in forest]
     return method
 
 
 def parse_contract(method):
     method["contract"] = Parser.parse("\n".join(method["contract"]))
+    for label, instructions, strings in method["contract"]:
+        for instruction in instructions:
+            token = instruction.token
+            statistic.count(token)
+        statistic.count(label)
     return method
 
 

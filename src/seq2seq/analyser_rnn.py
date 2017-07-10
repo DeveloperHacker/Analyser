@@ -58,16 +58,12 @@ def input_projection(inputs, projection_size, dtype):
     return projections
 
 
-def analysing_loss(data, variables, l2_loss_weight=0.0001):
+def analysing_loss(targets, logits, variables, l2_loss_weight=0.0001):
     with vs.variable_scope("analysing_loss"):
-        losses = []
-        for targets, logits in data:
-            data_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-            data_loss = tf.reduce_mean(data_loss, list(range(1, len(data_loss.shape))))
-            losses.append(data_loss)
-        losses = tf.stack(losses)
+        data_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+        data_loss = tf.reduce_mean(data_loss, list(range(1, len(data_loss.shape))))
         l2_loss = l2_loss_weight * tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-        loss = tf.sqrt(tf.reduce_sum(tf.square(losses), 0) + tf.square(l2_loss))
+        loss = tf.sqrt(tf.square(data_loss) + tf.square(l2_loss))
     return loss
 
 
