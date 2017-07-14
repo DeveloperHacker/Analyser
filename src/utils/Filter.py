@@ -3,32 +3,21 @@ import re
 from constants.tags import *
 
 
-class Filter:
-    @staticmethod
-    def diff(s1: str, s2: str) -> str:
-        left = s1.index(s2)
-        return s1[:left] + s1[left + len(s2):]
+def count_words(words: list) -> int:
+    return len([word for word in words if isKeyWord(word) or word.isalpha()])
 
-    @staticmethod
-    def isKeyWord(string) -> bool:
-        for keyword in TAGS:
-            if keyword in string and string.index(keyword) == 0:
-                diff = Filter.diff(string, keyword)
-                if len(diff) == 0 or diff.isnumeric():
-                    return True
-        return False
 
-    @staticmethod
-    def isPunctuation(string: str) -> bool:
-        return string in PUNCTUATION
-
-    @staticmethod
-    def wordsNumber(words: list) -> int:
-        return len([word for word in words if Filter.isKeyWord(word) or word.isalpha()])
+def isKeyWord(string) -> bool:
+    for keyword in TAGS:
+        if keyword in string and string.index(keyword) == 0:
+            difference = string[len(keyword):]
+            if len(difference) == 0 or difference.isnumeric():
+                return True
+    return False
 
 
 def filterStrings(string: str) -> str:
-    return re.sub("\".*?[^\\\]\"", " %s " % string, string)
+    return re.sub("\".*?[^\\\]\"", " %s " % STRING, string)
 
 
 def filterTags(string: str) -> str:
@@ -94,7 +83,7 @@ def filterMeaninglessSentences(string: str) -> str:
         if ch == '.' and len(sentence) > 1:
             sentence = "".join(sentence)
             words = [word for word in sentence.split(" ") if len(word) > 0]
-            if (Filter.wordsNumber(words) / len(words)) > NORMAL_CONCENTRATION_OF_WORDS:
+            if (count_words(words) / len(words)) > NORMAL_CONCENTRATION_OF_WORDS:
                 text.append(sentence)
             sentence = []
     return "".join(text)
@@ -109,6 +98,7 @@ def unpackStableReduction(string: str) -> str:
 
 
 def expandWordsAndSymbols(string: str) -> str:
+    PUNCTUATION = (".", ",", ":", ";", "(", ")", "{", "}")
     regex = "(" + "|".join("\\" + symbol for symbol in PUNCTUATION) + ")"
     return re.sub(regex, r" \1 ", string)
 
@@ -156,11 +146,12 @@ def applyFiltersForString(string: str, params: list) -> str:
 
 def apply(method):
     params = [param["name"] for param in method["description"]["parameters"]]
-    java_doc = method["java-doc"]
-    for label, text in java_doc.items():
-        java_doc[label] = [applyFiltersForString(param, params) for param in text]
-    java_doc["variables"] = [
-        "@variable%d %s" % (i, applyFiltersForString(convert(name).replace(r"_", " "), params))
+    method["java-doc"] = {
+        label: [applyFiltersForString(param, params) for param in text]
+        for label, text in method["java-doc"].items()
+    }
+    method["java-doc"][VARIABLE] = [
+        "%s%d %s" % (VARIABLE, i, applyFiltersForString(convert(name).replace(r"_", " "), params))
         for i, name in enumerate(params)
     ]
     return method

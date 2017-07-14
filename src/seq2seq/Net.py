@@ -2,8 +2,16 @@ import os
 import re
 import time
 from abc import ABCMeta
+from typing import Iterable
 
 import tensorflow as tf
+
+from utils.wrapper import read_only_lazy_property
+
+time_format = "%d-%m-%Y-%H-%M-%S"
+time_pattern = "\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}"
+folder_pattern = re.compile("model-(%s)" % time_pattern)
+model_pattern = re.compile("model-(%s)\.ckpt\.meta" % time_pattern)
 
 
 class Net(metaclass=ABCMeta):
@@ -11,53 +19,53 @@ class Net(metaclass=ABCMeta):
         def __init__(self):
             super().__init__("NaN hasn't expected")
 
-    def get_saver(self) -> tf.train.Saver:
-        if self._saver is None:
-            self._saver = tf.train.Saver(var_list=self.get_variables())
-        return self._saver
+    @read_only_lazy_property
+    def saver(self) -> tf.train.Saver:
+        return tf.train.Saver(var_list=self.variables)
 
-    def get_variables(self):
-        if self._variables is None:
-            self._variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
-        return self._variables
+    @read_only_lazy_property
+    def variables(self) -> Iterable[tf.Variable]:
+        return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
 
-    def __init__(self, name: str, save_path: str):
+    @property
+    def create_time(self):
+        if self._create_time is None:
+            self._create_time = time.strftime(time_format)
+        return self._create_time
+
+    @property
+    def folder_path(self) -> str:
+        return "{}/model-{}".format(self.save_path, self.create_time)
+
+    @property
+    def model_path(self) -> str:
+        return "{}/model-{}.ckpt".format(self.folder_path, time.strftime(time_format))
+
+    def __init__(self, name: str, save_path: str, scope=None):
         self.save_path = save_path
         self.name = name
-        self.create_time = time.strftime("%d-%m-%Y-%H-%M-%S")
-        self._variables = None
-        self._saver = None
-        self.scope = None
-
-    def reset(self, session: tf.Session):
-        self.create_time = time.strftime("%d-%m-%Y-%H-%M-%S")
-        self._saver = None
-        session.run(tf.global_variables_initializer())
+        self.scope = scope
+        self._create_time = None
 
     def save(self, session: tf.Session):
-        path = self.get_model_path()
-        model_path = path + "/model-{}.ckpt".format(time.strftime("%d-%m-%Y-%H-%M-%S"))
-        saver = self.get_saver()
-        saver.save(session, model_path)
+        if not os.path.isdir(self.folder_path):
+            os.mkdir(self.folder_path)
+        self.saver.save(session, self.model_path)
 
     def newest(self, path: str, filtrator):
-        names = [path + "/" + name for name in os.listdir(path) if filtrator(path + "/" + name)]
+        names = [path + "/" + name for name in os.listdir(path) if filtrator(path, name)]
         if len(names) == 0:
             raise FileNotFoundError("Saves from {} net is not found".format(self.name))
         names.sort(key=os.path.getmtime, reverse=True)
-        last = names[0]
-        return last
+        return names[0]
 
-    def restore(self, session: tf.Session):
-        filtrator = lambda path: os.path.isdir(path) and len(os.listdir(path)) > 0 and self.name in path
-        folder_path = self.newest(self.save_path, filtrator)
-        model_filtrator = lambda path: os.path.isfile(path) and re.match(r".+/model-.+\.ckpt\.meta", path)
-        model_path = self.newest(folder_path, model_filtrator)
-        model_path = ".".join(model_path.split(".")[:-1])
-        self.create_time = re.match(".+/model-(.+)\.ckpt", model_path).groups()[0]
-        self.get_saver().restore(session, model_path)
-
-    def get_model_path(self) -> str:
-        path = "{}/model-{}-net-{}".format(self.save_path, self.name, self.create_time)
-        if not os.path.isdir(path): os.mkdir(path)
-        return path
+    def restore(self, session: tf.Session, model_path: str = None):
+        folder_filtrator = lambda path, name: os.path.isdir(path + "/" + name) and re.match(folder_pattern, name)
+        model_filtrator = lambda path, name: os.path.isfile(path + "/" + name) and re.match(model_pattern, name)
+        if not model_path:
+            folder_path = self.newest(self.save_path, folder_filtrator)
+            model_path = self.newest(folder_path, model_filtrator)
+            matched = re.match(model_pattern, model_path.split("/")[-1])
+            self._create_time = matched.groups()[0]
+            model_path = ".".join(model_path.split(".")[:-1])
+        self.saver.restore(session, model_path)

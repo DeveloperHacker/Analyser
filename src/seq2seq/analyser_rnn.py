@@ -10,14 +10,15 @@ _WEIGHTS_NAME = dynamic_rnn._WEIGHTS_NAME
 _BIAS_NAME = dynamic_rnn._BIAS_NAME
 
 
-def sequence_input(cells_fw, cells_bw, inputs: list, sequence_lengths: list, dtype):
+def sequence_input(cells_fw: dict, cells_bw: dict, inputs: dict, sequence_lengths: dict, dtype):
     if len(inputs) != len(sequence_lengths):
         raise ValueError("Number of inputs and inputs lengths must be equals")
     if len(inputs) == 0:
         raise ValueError("Number of inputs must be greater zero")
 
     batch_size = None
-    for _inputs, _sequence_lengths in zip(inputs, sequence_lengths):
+    for label, _inputs in inputs.items():
+        _sequence_lengths = sequence_lengths[label]
         _batch_size = _inputs.get_shape()[0].value
         if batch_size is not None and _batch_size != batch_size:
             raise ValueError("Batch sizes for any inputs must be equals")
@@ -26,17 +27,20 @@ def sequence_input(cells_fw, cells_bw, inputs: list, sequence_lengths: list, dty
             raise ValueError("Batch sizes of Inputs and inputs lengths must be equals")
 
     attention_states = []
-    for i, (_inputs, _sequence_lengths) in enumerate(zip(inputs, sequence_lengths)):
-        with vs.variable_scope("encoder_%d" % i):
+    for label, _inputs in inputs.items():
+        _sequence_lengths = sequence_lengths[label]
+        _cells_fw = cells_fw[label]
+        _cells_bw = cells_bw[label]
+        with vs.variable_scope("encoder_%s" % label):
             encoder_outputs, states_fw, states_bw = stack_bidirectional_dynamic_rnn(
-                cells_fw, cells_bw, _inputs, sequence_length=_sequence_lengths, dtype=dtype)
+                _cells_fw, _cells_bw, _inputs, sequence_length=_sequence_lengths, dtype=dtype)
             attention_states.append(tf.concat((states_fw[-1], states_bw[-1]), 2))
     return attention_states
 
 
 def input_projection(inputs, projection_size, dtype):
     input_size = None
-    for _inputs in inputs:
+    for _inputs in inputs.values():
         _input_size = _inputs.get_shape()[2].value
         if input_size is not None and _input_size != input_size:
             raise ValueError("Input sizes for any inputs must be equals")
@@ -45,8 +49,8 @@ def input_projection(inputs, projection_size, dtype):
     with vs.variable_scope("input_projection"):
         W_enc = vs.get_variable(_WEIGHTS_NAME, [input_size, projection_size], dtype)
         B_enc = vs.get_variable(_BIAS_NAME, [projection_size], dtype, init_ops.constant_initializer(0, dtype))
-        projections = []
-        for i, _inputs in enumerate(inputs):
+        projections = {}
+        for label, _inputs in inputs.items():
             batch_size = _inputs.get_shape()[0].value
             input_length = _inputs.get_shape()[1].value
             if input_length is None:
@@ -54,23 +58,14 @@ def input_projection(inputs, projection_size, dtype):
             _inputs = tf.reshape(_inputs, [batch_size * input_length, input_size])
             projection = _inputs @ W_enc + B_enc
             projection = tf.reshape(projection, [batch_size, input_length, projection_size])
-            projections.append(projection)
+            projections[label] = projection
     return projections
-
-
-def analysing_loss(targets, logits, variables, l2_loss_weight=0.0001):
-    with vs.variable_scope("analysing_loss"):
-        data_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        data_loss = tf.reduce_mean(data_loss, list(range(1, len(data_loss.shape))))
-        l2_loss = l2_loss_weight * tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-        loss = tf.sqrt(tf.square(data_loss) + tf.square(l2_loss))
-    return loss
 
 
 def sequence_output(attention_states,
                     root_cells, root_time_steps, root_num_heads,
                     sequence_cells, sequence_time_steps, sequence_num_heads,
-                    output_size,
+                    num_labels, num_tokens,
                     dtype):
     if len(sequence_cells) != len(root_cells):
         raise ValueError("Number of sequence cells and root cells must be equals")
@@ -81,58 +76,62 @@ def sequence_output(attention_states,
             raise ValueError("Batch sizes for any Attention states must be equals")
         batch_size = _batch_size
     with vs.variable_scope("root_decoder"):
-        root_decoder_inputs = tf.zeros([root_time_steps, batch_size, output_size], dtype)
-        root_decoder_outputs, root_decoder_states = stack_attention_dynamic_rnn(
-            root_cells, root_decoder_inputs, attention_states, output_size, root_num_heads, dtype=dtype)
+        root_decoder_inputs = tf.zeros([root_time_steps, batch_size, num_tokens], dtype)
+        root_decoder_outputs, root_decoder_states, root_decoder_attention_weighs = stack_attention_dynamic_rnn(
+            root_cells, root_decoder_inputs, attention_states, num_labels, root_num_heads, dtype=dtype)
         roots = root_decoder_states[-1]
+        labels = root_decoder_outputs
         num_roots = roots.get_shape()[0].value
         if num_roots is None:
             num_roots = array_ops.shape(roots)[0]
         root_decoder_states = tf.transpose(tf.stack(root_decoder_states), [1, 0, 2, 3])
     with vs.variable_scope("sequence_decoder"):
         time_steps = sequence_time_steps + 1
+        time = array_ops.constant(0, tf.int32, name="time")
         with vs.variable_scope("Arrays"):
-            outputs_ta = tf.TensorArray(
-                dtype,
-                size=num_roots,
-                tensor_array_name="outputs",
-                clear_after_read=False)
-            states_ta = tf.TensorArray(
-                dtype,
-                size=num_roots,
-                tensor_array_name="states",
-                clear_after_read=False)
+            outputs_ta = tf.TensorArray(dtype, size=num_roots, tensor_array_name="outputs", clear_after_read=False)
+            states_ta = tf.TensorArray(dtype, size=num_roots, tensor_array_name="states", clear_after_read=False)
 
-        def _time_step(time, _outputs_ta, _states_ta):
-            sequence_decoder_inputs = tf.zeros([time_steps, batch_size, output_size], dtype)
+        def time_step(time, outputs_ta, states_ta):
+            sequence_decoder_inputs = tf.zeros([time_steps, batch_size, num_tokens], dtype)
             initial_states = tf.unstack(tf.gather(root_decoder_states, time))
-            sequence_decoder_outputs, sequence_decoder_states = stack_attention_dynamic_rnn(
+            sequence_decoder_outputs, sequence_decoder_states, sequence_decoder_attention_weighs = stack_attention_dynamic_rnn(
                 sequence_cells,
                 sequence_decoder_inputs,
                 attention_states,
-                output_size,
+                num_tokens,
                 sequence_num_heads,
                 initial_states=initial_states,
                 dtype=dtype)
-            _outputs_ta = _outputs_ta.write(time, sequence_decoder_outputs[-1])
-            _states_ta = _states_ta.write(time, sequence_decoder_states[-1])
-            return time + 1, _outputs_ta, _states_ta
+            outputs_ta = outputs_ta.write(time, sequence_decoder_outputs[-1])
+            states_ta = states_ta.write(time, sequence_decoder_states[-1])
+            return time + 1, outputs_ta, states_ta
 
         _, outputs_ta, states_ta = control_flow_ops.while_loop(
-            cond=lambda _time, *_: _time < num_roots, body=_time_step, loop_vars=(0, outputs_ta, states_ta))
+            cond=lambda time, *_: time < num_roots, body=time_step, loop_vars=(time, outputs_ta, states_ta))
 
+        with vs.variable_scope("LabelProjection"):
+            labels_logits = tf.reshape(labels, [num_roots * batch_size, num_labels])
+            labels = tf.nn.softmax(labels_logits, 1)
+            labels_logits = tf.reshape(labels_logits, [num_roots, batch_size, num_labels])
+            labels = tf.reshape(labels, [num_roots, batch_size, num_labels])
         with vs.variable_scope("OutputProjection"):
             outputs_logits = outputs_ta.stack()
-            outputs_logits = tf.reshape(outputs_logits, [time_steps * num_roots * batch_size, output_size])
+            outputs_logits = tf.reshape(outputs_logits, [time_steps * num_roots * batch_size, num_tokens])
             outputs = tf.nn.softmax(outputs_logits, 1)
-            outputs_logits = tf.reshape(outputs_logits, [time_steps, num_roots, batch_size, output_size])
-            outputs = tf.reshape(outputs, [time_steps, num_roots, batch_size, output_size])
+            outputs_logits = tf.reshape(outputs_logits, [time_steps, num_roots, batch_size, num_tokens])
+            outputs = tf.reshape(outputs, [time_steps, num_roots, batch_size, num_tokens])
+        labels_logits = tf.transpose(labels_logits, [1, 0, 2])
+        labels = tf.transpose(labels, [1, 0, 2])
         outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
         outputs = tf.transpose(outputs, [2, 1, 0, 3])
-    return outputs_logits, outputs
+    return labels_logits, labels, outputs_logits, outputs
 
 
-def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, num_tokens, tree_height, dtype):
+def tree_output(attention_states,
+                root_cells, root_time_steps, root_num_heads,
+                tree_height, num_labels, num_tokens,
+                dtype):
     batch_size = None
     for state in attention_states:
         _batch_size = state.get_shape()[0].value
@@ -142,26 +141,18 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
 
     with vs.variable_scope("root_decoder"):
         root_decoder_inputs = tf.zeros([root_time_steps, batch_size, num_tokens], dtype)
-        root_decoder_outputs, root_decoder_states = stack_attention_dynamic_rnn(
-            root_cells,
-            root_decoder_inputs,
-            attention_states,
-            num_tokens,
-            root_num_heads,
-            dtype=dtype)
+        root_decoder_outputs, root_decoder_states, root_decoder_attention_weighs = stack_attention_dynamic_rnn(
+            root_cells, root_decoder_inputs, attention_states, num_labels, root_num_heads, dtype=dtype)
         roots = root_decoder_states[-1]
         labels = root_decoder_outputs
         num_roots = roots.get_shape()[0].value
         if num_roots is None:
             num_roots = array_ops.shape(roots)[0]
-        state_size = roots.get_shape()[2].value
-        states_ta_size = 2 ** tree_height - 1
 
     with vs.variable_scope("tree_decoder"):
+        state_size = roots.get_shape()[2].value
+        states_ta_size = 2 ** tree_height - 1
         bias_initializer = init_ops.constant_initializer(0, dtype)
-        with vs.variable_scope("LabelProjectionVariables"):
-            W_lbl = vs.get_variable(_WEIGHTS_NAME, [num_tokens, num_tokens], dtype)
-            B_lbl = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
         with vs.variable_scope("OutputProjectionVariables"):
             W_out = vs.get_variable(_WEIGHTS_NAME, [state_size, num_tokens], dtype)
             B_out = vs.get_variable(_BIAS_NAME, [num_tokens], dtype, bias_initializer)
@@ -195,11 +186,10 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
         states_ta = states_ta.write(0, roots)
         _, _, states_ta = control_flow_ops.while_loop(loop_condition, _time_step, (0, 1, states_ta))
         with vs.variable_scope("LabelProjection"):
-            labels = tf.reshape(labels, [num_roots * batch_size, num_tokens])
-            labels_logits = labels @ W_lbl + B_lbl
+            labels_logits = tf.reshape(labels, [num_roots * batch_size, num_labels])
             labels = tf.nn.softmax(labels_logits, 1)
-            labels_logits = tf.reshape(labels_logits, [1, num_roots, batch_size, num_tokens])
-            labels = tf.reshape(labels, [1, num_roots, batch_size, num_tokens])
+            labels_logits = tf.reshape(labels_logits, [num_roots, batch_size, num_labels])
+            labels = tf.reshape(labels, [num_roots, batch_size, num_labels])
         with vs.variable_scope("OutputProjection"):
             states = states_ta.stack()
             states = tf.reshape(states, [states_ta_size * num_roots * batch_size, state_size])
@@ -207,8 +197,8 @@ def tree_output(attention_states, root_cells, root_time_steps, root_num_heads, n
             outputs = tf.nn.softmax(outputs_logits, 1)
             outputs_logits = tf.reshape(outputs_logits, [states_ta_size, num_roots, batch_size, num_tokens])
             outputs = tf.reshape(outputs, [states_ta_size, num_roots, batch_size, num_tokens])
-        outputs_logits = tf.concat((labels_logits, outputs_logits), 0)
-        outputs = tf.concat((labels, outputs), 0)
+        labels_logits = tf.transpose(labels_logits, [1, 0, 2])
+        labels = tf.transpose(labels, [1, 0, 2])
         outputs_logits = tf.transpose(outputs_logits, [2, 1, 0, 3])
         outputs = tf.transpose(outputs, [2, 1, 0, 3])
-    return outputs_logits, outputs
+    return labels_logits, labels, outputs_logits, outputs

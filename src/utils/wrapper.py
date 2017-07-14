@@ -55,3 +55,58 @@ def trace(func):
         return result
 
     return wrapper
+
+
+def read_only_lazy_property(func):
+    attr_name = "_lazy_" + func.__name__
+
+    @property
+    def _property(self):
+        if not hasattr(self, attr_name):
+            setattr(self, attr_name, func(self))
+        return getattr(self, attr_name)
+
+    @_property.setter
+    def _property(self, value):
+        raise AttributeError
+
+    return _property
+
+
+def lazy_property(func):
+    attr_name = "_lazy_" + func.__name__
+
+    @property
+    def _property(self):
+        if not hasattr(self, attr_name):
+            setattr(self, attr_name, func(self))
+        return getattr(self, attr_name)
+
+    @_property.setter
+    def _property(self, value):
+        setattr(self, attr_name, value)
+
+    return _property
+
+
+def lazy_method(func):
+    attr_name = "_lazy_" + func.__name__
+
+    def _method(self, *args, **kwargs):
+        if not hasattr(self, attr_name):
+            setattr(self, attr_name, func(self, *args, **kwargs))
+        return getattr(self, attr_name)
+
+    return _method
+
+
+def lazy_function(func):
+    instance = None
+
+    def _function(*args, **kwargs):
+        nonlocal instance
+        if instance is None:
+            instance = func(*args, **kwargs)
+        return instance
+
+    return _function

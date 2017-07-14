@@ -1,3 +1,4 @@
+import itertools
 import os
 import random
 from multiprocessing import Value
@@ -11,16 +12,19 @@ from contracts.nodes.Ast import Ast
 from contracts.nodes.StringNode import StringNode
 from contracts.parser import Parser
 from contracts.tokens import tokens
+from contracts.tokens.LabelToken import LabelToken
+from contracts.tokens.MarkerToken import MarkerToken
+from contracts.tokens.PredicateToken import PredicateToken
 from contracts.tokens.Token import Token
 from contracts.visitors.AstCompiler import AstCompiler
 from contracts.visitors.AstEqualReducer import AstEqualReducer
 from contracts.visitors.AstVisitor import AstVisitor
 
 from config import init
+from constants import embeddings
 from constants.analyser import BATCH_SIZE, SEED
-from constants.embeddings import WordEmbeddings, TokenEmbeddings, PAD, NOP
 from constants.paths import ANALYSER_METHODS, JODA_TIME_METHODS
-from constants.tags import PARTS
+from constants.tags import PARTS, PAD, NOP
 from generate_embeddings import join_java_doc, empty
 from utils import Filter, Dumper
 from utils.Formatter import Formatter
@@ -47,24 +51,47 @@ class StringFiltrator(AstVisitor):
 
 class Statistic:
     def __init__(self):
-        self.tokens_counters = {token: Value("i", 0) for token in tokens.instances()}
+        self.predicate_counters = {
+            token: Value("i", 0) for token in tokens.predicates()
+        }
+        self.marker_counters = {
+            token: Value("i", 0) for token in tokens.markers()
+        }
+        self.label_counters = {
+            token: Value("i", 0) for token in tokens.labels()
+        }
         self.num_raw_methods = None
         self.num_methods = None
         self.num_batches = None
 
     def count(self, token: Token):
-        counter = self.tokens_counters[token.name]
+        if isinstance(token, PredicateToken):
+            counter = self.predicate_counters[token.name]
+        elif isinstance(token, MarkerToken):
+            counter = self.marker_counters[token.name]
+        elif isinstance(token, LabelToken):
+            counter = self.label_counters[token.name]
+        else:
+            raise ValueError(type(token))
         with counter.get_lock():
             counter.value += 1
 
     def num_tokens(self) -> int:
-        return sum(counter.value for counter in self.tokens_counters.values())
+        predicates = sum(counter.value for counter in self.predicate_counters.values())
+        markers = sum(counter.value for counter in self.marker_counters.values())
+        labels = sum(counter.value for counter in self.label_counters.values())
+        return predicates + markers + labels
 
     def show(self):
         method_concentration = self.num_methods / self.num_raw_methods * 100
         num_tokens = self.num_tokens()
         values = []
-        for token_name, counter in self.tokens_counters.items():
+        counters = itertools.chain(
+            self.predicate_counters.items(),
+            self.marker_counters.items(),
+            self.label_counters.items()
+        )
+        for token_name, counter in counters:
             number = counter.value
             concentration = number / num_tokens * 100
             values.append((token_name, number, concentration))
@@ -191,7 +218,9 @@ def filter_contract_text(method):
 
 
 def parse_contract(method):
-    method["contract"] = Parser.parse("\n".join(method["contract"]))
+    forest = Parser.parse("\n".join(method["contract"]))
+    compiler = AstDfsGuide(AstCompiler())
+    method["contract"] = [compiler.accept(tree) for tree in forest]
     for label, instructions, strings in method["contract"]:
         for instruction in instructions:
             token = instruction.token
@@ -203,13 +232,13 @@ def parse_contract(method):
 def index_contract(method):
     result = []
     for label, instructions, strings in method["contract"]:
-        label = TokenEmbeddings.get_index(label.name)
+        label = embeddings.labels().get_index(label.name)
         instructions = [
-            TokenEmbeddings.get_index(instruction.token.name)
+            embeddings.tokens().get_index(instruction.token.name)
             for instruction in instructions
         ]
         strings = {
-            idx: [WordEmbeddings.get_index(word) for word in string]
+            idx: [embeddings.words().get_index(word) for word in string]
             for idx, string in strings.items()
         }
         result.append((label, instructions, strings))
@@ -220,8 +249,8 @@ def index_contract(method):
 def index_java_doc(method):
     result = {}
     for label, text in method["java-doc"].items():
-        split = text.split(" ")
-        indexes = tuple(WordEmbeddings.get_index(word) for word in split)
+        split = (word.strip() for word in text.split(" "))
+        indexes = tuple(embeddings.words().get_index(word) for word in split if len(word) > 0)
         result[label] = indexes
     method["java-doc"] = result
     return method
@@ -234,7 +263,7 @@ def build_batch(methods: List[dict]):
     }
     inputs = {label: [] for label in PARTS}
     inputs_sizes = {label: [] for label in PARTS}
-    pad_index = WordEmbeddings.get_index(PAD)
+    pad_index = embeddings.words().get_index(PAD)
     for method in methods:
         for label in PARTS:
             line = list(method["java-doc"][label])
@@ -251,27 +280,30 @@ def build_batch(methods: List[dict]):
         root_time_steps.append(len(contract))
         for label, instructions, strings in contract:
             output_time_steps.append(len(instructions))
-    root_time_steps = max(root_time_steps)
+    root_time_steps = max(root_time_steps) + 1
     output_time_steps = max(output_time_steps)
     depth = int(np.ceil(np.log2(output_time_steps)))
     output_type = os.environ['OUTPUT_TYPE']
     if output_type == "tree":
         output_time_steps = 2 ** depth - 1
-    elif output_type in ("bfs_sequence", "dfs_sequence"):
-        output_time_steps += 1
     outputs = []
-    nop_index = TokenEmbeddings.get_index(NOP)
-    empty_sequence = [nop_index for _ in range(output_time_steps + 1)]
+    labels = []
+    nop_index = embeddings.tokens().get_index(NOP)
+    empty_sequence = [nop_index for _ in range(output_time_steps)]
     for method in methods:
         outputs.append([])
+        labels.append([])
         for label, instructions, strings in method["contract"]:
             expected = output_time_steps - len(instructions)
-            line = [label] + instructions + [nop_index] * expected
+            line = instructions + [nop_index] * expected
             outputs[-1].append(line)
+            labels[-1].append(label)
         expected = root_time_steps - len(outputs[-1])
         outputs[-1].extend([empty_sequence] * expected)
+        labels[-1].extend([0] * expected)
+    labels = np.asarray(labels)
     outputs = np.asarray(outputs)
-    return inputs, inputs_sizes, outputs, root_time_steps, output_time_steps, depth
+    return inputs, inputs_sizes, labels, outputs, root_time_steps, output_time_steps, depth
 
 
 if __name__ == '__main__':

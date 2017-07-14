@@ -1,3 +1,5 @@
+from constants import embeddings
+
 BATCH_SIZE = 5
 
 INPUT_SIZE = 40
@@ -19,3 +21,11 @@ TRAIN_SET = 0.8
 VALIDATION_SET = 0.1
 MINIMUM_DATA_SET_LENGTH = 1
 SEED = 10
+
+L2_LOSS_WEIGHT = 0.001
+
+SMOOTHING = 0.64
+
+NUM_TOKENS = len(embeddings.tokens())
+NUM_LABELS = len(embeddings.labels())
+NUM_WORDS = len(embeddings.words())

@@ -1,8 +1,6 @@
-MAX_NUM_PARAMS = 10
-MAX_NUM_NUMBER = 2
+NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
 STRING = "@string"
-VARIABLE = "@variable"
 NUMBER = "@number"
 TRUE = "@true"
 FALSE = "@false"
@@ -14,47 +12,37 @@ LINK = "@link"
 PATH = "@path"
 URL = "@url"
 INVOCATION = "@invocation"
-DOT_INVOCATION = "@dotInvocation"
-STABLE_REDUCTION = "@sr"
+DOT_INVOCATION = "@dot_invocation"
+STABLE_REDUCTION = "@stable_reduction"
 
 HEAD = "@head"
-PARAMS = "@param"
+PARAMETER = "@param"
 RETURN = "@return"
-VARIABLES = "@variable"
-SEE = "@see"
+VARIABLE = "@var"
 THROW = "@throw"
+SEE = "@see"
 
 NEXT = "@next"
+GO = "@go"
+PAD = "@pad"
+NOP = "@nop"
 
-NORMAL_CONCENTRATION_OF_WORDS = 0.7
+PARTS = (HEAD, PARAMETER, RETURN, VARIABLE, THROW, SEE)
 
-PARTS = (
-    "head",
-    "parameters",
-    "results",
-    "variables",
-    "sees",
-    "throws"
-)
-
-TAGS = (
+TAGS = PARTS + (
     STRING,
     HTML,
     REFERENCE,
     LINK,
     PATH,
     URL,
-    VARIABLE,
     INVOCATION,
     DOT_INVOCATION,
     NUMBER,
     STABLE_REDUCTION,
-    HEAD,
-    PARAMS,
-    RETURN,
-    THROW,
-    SEE,
-    NEXT
-)
 
-PUNCTUATION = (".", ",", ":", ";", "(", ")", "{", "}")
+    NEXT,
+    GO,
+    PAD,
+    NOP
+)

@@ -1,158 +1,103 @@
-import numpy as np
-from contracts.tokens import tokens
-from contracts.tokens.MarkerToken import MarkerToken
 from typing import List, Dict, Tuple
 
-from utils import Dumper
+import numpy as np
+from contracts.tokens import tokens as _tokens
+from contracts.tokens.MarkerToken import MarkerToken
+
 from constants.generator import EMBEDDING_SIZE
 from constants.paths import EMBEDDINGS
-
-GO = "@go"
-GO_emb = np.ones([EMBEDDING_SIZE], dtype=np.float32)
-PAD = "@pad"
-PAD_emb = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
-NOP = "@nop"
-NOP_token = MarkerToken(NOP)
-tokens.register(NOP_token)
+from constants.tags import GO, PAD, NOP
+from utils import Dumper
+from utils.wrapper import read_only_lazy_property, lazy_function
 
 
 # ToDo: thread save
-class WordEmbeddings:
-    _instance = None
-    _word2idx = None
-    _emb2idx = None
+class Embeddings:
+    def __init__(self, instance: List[Tuple[str, np.array]], default_name: str = None):
+        self._instance = instance
+        self.default_name = default_name
 
-    @staticmethod
-    def instance() -> dict:
-        if WordEmbeddings._instance is None:
-            WordEmbeddings._instance = Dumper.pkl_load(EMBEDDINGS)
-            WordEmbeddings._instance[GO] = GO_emb
-            WordEmbeddings._instance[PAD] = PAD_emb
-            WordEmbeddings._instance = list(WordEmbeddings._instance.items())
-            WordEmbeddings._instance.sort(key=lambda x: x[0])
-        return WordEmbeddings._instance
+    @property
+    def instance(self) -> List[Tuple[str, np.array]]:
+        return self._instance
 
-    @staticmethod
-    def idx2word() -> List[str]:
-        return [word for word, embedding in WordEmbeddings.instance()]
+    @read_only_lazy_property
+    def name2emb(self) -> Dict[str, np.array]:
+        return {name: embedding for name, embedding in self._instance}
 
-    @staticmethod
-    def idx2emb() -> List[np.ndarray]:
-        return [embedding for word, embedding in WordEmbeddings.instance()]
+    @read_only_lazy_property
+    def idx2name(self) -> List[str]:
+        return [name for name, embedding in self.instance]
 
-    @staticmethod
-    def emb2idx() -> dict:
-        if WordEmbeddings._emb2idx is None:
-            WordEmbeddings._emb2idx = {}
-            for index, (word, embedding) in enumerate(WordEmbeddings.instance()):
-                WordEmbeddings._emb2idx[tuple(embedding)] = index
-        return WordEmbeddings._emb2idx
+    @read_only_lazy_property
+    def idx2emb(self) -> List[np.ndarray]:
+        return [embedding for name, embedding in self.instance]
 
-    @staticmethod
-    def word2idx() -> dict:
-        if WordEmbeddings._word2idx is None:
-            WordEmbeddings._word2idx = {word: i for i, (word, embedding) in enumerate(WordEmbeddings.instance())}
-        return WordEmbeddings._word2idx
+    @read_only_lazy_property
+    def emb2idx(self) -> Dict[Tuple[np.dtype], int]:
+        return {tuple(embedding): index for index, (name, embedding) in enumerate(self.instance)}
 
-    @staticmethod
-    def get_store(key):
-        if key is None:
-            index = WordEmbeddings.word2idx()[PAD]
-        elif isinstance(key, int):
-            index = key
-        elif isinstance(key, str):
-            if key in WordEmbeddings.word2idx():
-                index = WordEmbeddings.word2idx()[key]
-            else:
-                index = WordEmbeddings.word2idx()["UNK"]
-        else:
-            key = tuple(key)
-            if key in WordEmbeddings.emb2idx():
-                index = WordEmbeddings.emb2idx()[key]
-            else:
-                raise Exception("Store with embedding {} is not found".format(key))
-        return (index,) + WordEmbeddings.instance()[index]
+    @read_only_lazy_property
+    def name2idx(self) -> dict:
+        return {word: i for i, (word, embedding) in enumerate(self.instance)}
 
-    @staticmethod
-    def get_embedding(key):
-        return WordEmbeddings.get_store(key)[2]
-
-    @staticmethod
-    def get_index(key):
-        return WordEmbeddings.get_store(key)[0]
-
-    @staticmethod
-    def get_word(key):
-        return WordEmbeddings.get_store(key)[1]
-
-
-# ToDo: thread save
-class TokenEmbeddings:
-    _idx2token = None
-    _token2idx = None
-    _emb2idx = None
-    _idx2emb = None
-
-    @staticmethod
-    def instance() -> List[str]:
-        if TokenEmbeddings._idx2token is None:
-            TokenEmbeddings._idx2token = list(tokens.instances())
-            TokenEmbeddings._idx2token.sort()
-        return TokenEmbeddings._idx2token
-
-    @staticmethod
-    def idx2token() -> List[str]:
-        return TokenEmbeddings.instance()
-
-    @staticmethod
-    def idx2emb() -> List[np.ndarray]:
-        if TokenEmbeddings._idx2emb is None:
-            TokenEmbeddings._idx2emb = list(np.eye(len(TokenEmbeddings.instance())))
-        return TokenEmbeddings._idx2emb
-
-    @staticmethod
-    def emb2idx() -> Dict[tuple, int]:
-        if TokenEmbeddings._emb2idx is None:
-            TokenEmbeddings._emb2idx = {tuple(embedding): i for i, embedding in enumerate(TokenEmbeddings.idx2emb())}
-        return TokenEmbeddings._emb2idx
-
-    @staticmethod
-    def token2idx() -> Dict[str, int]:
-        if TokenEmbeddings._token2idx is None:
-            TokenEmbeddings._token2idx = {name: index for index, name in enumerate(TokenEmbeddings.instance())}
-        return TokenEmbeddings._token2idx
-
-    @staticmethod
-    def get_store(key) -> Tuple[int, str, np.ndarray]:
+    def get_store(self, key):
         if key is None:
             raise ValueError
         if isinstance(key, int):
             index = key
+            if index < 0 or index >= len(self.instance):
+                raise Exception("Store with index {} is not found".format(key))
         elif isinstance(key, str):
-            if key in TokenEmbeddings.token2idx():
-                index = TokenEmbeddings.token2idx()[key]
+            if key in self.name2idx:
+                index = self.name2idx[key]
+            elif self.default_name is not None:
+                index = self.name2idx[self.default_name]
             else:
                 raise Exception("Store with name {} is not found".format(key))
         else:
             key = tuple(key)
-            if key in TokenEmbeddings.emb2idx():
-                index = TokenEmbeddings.emb2idx()[key]
+            if key in self.emb2idx:
+                index = self.emb2idx[key]
             else:
                 raise Exception("Store with embedding {} is not found".format(key))
-        return index, TokenEmbeddings.idx2token()[index], TokenEmbeddings.idx2emb()[index]
+        return index, self.idx2name[index], self.idx2emb[index]
 
-    @staticmethod
-    def get_embedding(key) -> np.ndarray:
-        return TokenEmbeddings.get_store(key)[2]
+    def get_index(self, key) -> int:
+        return self.get_store(key)[0]
 
-    @staticmethod
-    def get_index(key) -> int:
-        return TokenEmbeddings.get_store(key)[0]
+    def get_name(self, key) -> str:
+        return self.get_store(key)[1]
 
-    @staticmethod
-    def get_token(key) -> str:
-        return TokenEmbeddings.get_store(key)[1]
+    def get_embedding(self, key) -> np.array:
+        return self.get_store(key)[2]
+
+    def __len__(self):
+        return len(self.instance)
 
 
-NUM_TOKENS = len(TokenEmbeddings.instance())
-NUM_WORDS = len(WordEmbeddings.instance())
+@lazy_function
+def words() -> Embeddings:
+    instance = Dumper.pkl_load(EMBEDDINGS)
+    instance[GO] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
+    instance[PAD] = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
+    instance = list(instance.items())
+    instance.sort(key=lambda x: x[0])
+    return Embeddings(instance, "UNK")
+
+
+@lazy_function
+def tokens() -> Embeddings:
+    _tokens.register(MarkerToken(NOP))
+    names = list(_tokens.predicates()) + list(_tokens.markers())
+    embeddings = list(np.eye(len(names)))
+    instance = list(zip(names, embeddings))
+    return Embeddings(instance)
+
+
+@lazy_function
+def labels() -> Embeddings:
+    names = list(_tokens.labels())
+    embeddings = list(np.eye(len(names)))
+    instance = list(zip(names, embeddings))
+    return Embeddings(instance)

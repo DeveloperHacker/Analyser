@@ -19,7 +19,7 @@ _BIAS_NAME = "biases"
 _WEIGHTS_NAME = "weights"
 
 
-def _infer_state_dtype(explicit_dtype, state):
+def infer_state_dtype(explicit_dtype, state):
     """Infer the dtype of an RNN state.
 
     Args:
@@ -445,15 +445,13 @@ def _dynamic_rnn_loop(cell,
                 "Batch_size is not the same for all the elements in the input.")
 
     # Prepare dynamic conditional copying of state & output
-    def _create_zero_arrays(size):
+    def create_zero_arrays(size):
         size = _concat(batch_size, size)
         return array_ops.zeros(
-            array_ops.stack(size), _infer_state_dtype(dtype, state))
+            array_ops.stack(size), infer_state_dtype(dtype, state))
 
-    flat_zero_output = tuple(_create_zero_arrays(output)
-                             for output in flat_output_size)
-    zero_output = nest.pack_sequence_as(structure=cell.output_size,
-                                        flat_sequence=flat_zero_output)
+    flat_zero_output = tuple(create_zero_arrays(output) for output in flat_output_size)
+    zero_output = nest.pack_sequence_as(structure=cell.output_size, flat_sequence=flat_zero_output)
 
     if sequence_length is not None:
         min_sequence_length = math_ops.reduce_min(sequence_length)
@@ -464,19 +462,13 @@ def _dynamic_rnn_loop(cell,
     with ops.name_scope("dynamic_rnn") as scope:
         base_name = scope
 
-    def _create_ta(name, _dtype):
-        return tensor_array_ops.TensorArray(dtype=_dtype,
-                                            size=time_steps,
-                                            tensor_array_name=base_name + name)
+    def create_ta(name, _dtype):
+        return tensor_array_ops.TensorArray(dtype=_dtype, size=time_steps, tensor_array_name=base_name + name)
 
-    state_ta = tuple(
-        _create_ta("state_%d" % i, _infer_state_dtype(dtype, state)) for i in range(len(flat_state_size)))
-    output_ta = tuple(
-        _create_ta("output_%d" % i, _infer_state_dtype(dtype, state)) for i in range(len(flat_output_size)))
-    input_ta = tuple(
-        _create_ta("input_%d" % i, flat_input[0].dtype) for i in range(len(flat_input)))
-    input_ta = tuple(
-        ta.unstack(input_) for ta, input_ in zip(input_ta, flat_input))
+    state_ta = tuple(create_ta("state_%d" % i, infer_state_dtype(dtype, state)) for i in range(len(flat_state_size)))
+    output_ta = tuple(create_ta("output_%d" % i, infer_state_dtype(dtype, state)) for i in range(len(flat_output_size)))
+    input_ta = tuple(create_ta("input_%d" % i, flat_input[0].dtype) for i in range(len(flat_input)))
+    input_ta = tuple(ta.unstack(input) for ta, input in zip(input_ta, flat_input))
 
     def _time_step(_time, output_ta_t, _state, state_ta_t):
         """Take a time step of the dynamic RNN.
@@ -492,8 +484,8 @@ def _dynamic_rnn_loop(cell,
 
         input_t = tuple(ta.read(_time) for ta in input_ta)
         # Restore some shape information
-        for input_, _shape in zip(input_t, inputs_got_shape):
-            input_.set_shape(_shape[1:])
+        for input, _shape in zip(input_t, inputs_got_shape):
+            input.set_shape(_shape[1:])
 
         input_t = nest.pack_sequence_as(structure=inputs, flat_sequence=input_t)
 
@@ -665,80 +657,84 @@ def attention_dynamic_rnn(
 
         bias_initializer = init_ops.constant_initializer(0, dtype)
         with vs.variable_scope("AttentionInputProjection"):
-            W_inp = vs.get_variable(_WEIGHTS_NAME,
-                                    [input_size + attn_size * num_heads * num_attentions, input_size],
-                                    dtype)
+            input_length = input_size + attn_size * num_heads * num_attentions
+            W_inp = vs.get_variable(_WEIGHTS_NAME, [input_length, input_size], dtype)
             B_inp = vs.get_variable(_BIAS_NAME, [input_size], dtype, bias_initializer)
-
         with vs.variable_scope("AttentionOutputProjection"):
-            W_out = vs.get_variable(_WEIGHTS_NAME,
-                                    [cell.output_size + attn_size * num_heads * num_attentions, output_size],
-                                    dtype)
+            output_length = cell.output_size + attn_size * num_heads * num_attentions
+            W_out = vs.get_variable(_WEIGHTS_NAME, [output_length, output_size], dtype)
             B_out = vs.get_variable(_BIAS_NAME, [output_size], dtype, bias_initializer)
-
         with vs.variable_scope("AttentionStateProjection"):
             W_stt = vs.get_variable(_WEIGHTS_NAME, [cell.state_size, attn_size], dtype)
             B_stt = vs.get_variable(_BIAS_NAME, [attn_size], dtype, bias_initializer)
 
         with vs.variable_scope("Arrays"):
-            output_ta = tensor_array_ops.TensorArray(dtype,
-                                                     time_steps,
-                                                     tensor_array_name="outputs",
-                                                     element_shape=[batch_size, output_size])
-            state_ta = tensor_array_ops.TensorArray(dtype,
-                                                    time_steps,
-                                                    tensor_array_name="states",
-                                                    element_shape=[batch_size, cell.state_size])
+            name = "outputs"
+            shape = [batch_size, output_size]
+            output_ta = tensor_array_ops.TensorArray(dtype, time_steps, tensor_array_name=name, element_shape=shape)
+            name = "states"
+            shape = [batch_size, cell.state_size]
+            state_ta = tensor_array_ops.TensorArray(dtype, time_steps, tensor_array_name=name, element_shape=shape)
+            attentions_weights_ta = []
+            for i in range(num_attentions * num_heads):
+                ta = tensor_array_ops.TensorArray(dtype, time_steps, tensor_array_name="attentions_weights_%d" % i)
+                attentions_weights_ta.append(ta)
 
         time = array_ops.constant(0, dtypes.int32, name="time")
-
-        inp = array_ops.gather(inputs, 0)
+        input = array_ops.gather(inputs, 0)
         output = array_ops.constant(0, dtypes.float32, [batch_size, output_size], name="output")
 
         def attention(_state):
             """Put attention masks on hidden using hidden_features and query."""
             with vs.variable_scope("Attention"):
-                _attentions = []  # Results of attention reads will be stored here.
+                attentions = []  # Results of attention reads will be stored here.
+                attentions_weights = []
                 for i in range(num_attentions):
+                    attn_length = attn_lengths[i]
+                    hidden = hiddens[i]
                     for j in range(num_heads):
+                        vector = vectors[i][j]
+                        hidden_features = hiddens_features[i][j]
                         y = _state @ W_stt + B_stt
-                        y = array_ops.reshape(y, [-1, 1, 1, attn_size])
-                        # Attention mask is a softmax of v^T * tanh(...).
-                        s = math_ops.reduce_sum(vectors[i][j] * math_ops.tanh(hiddens_features[i][j] + y), [2, 3])
-                        d = nn_ops.softmax(s)
-                        # Now calculate the attention-weighted vector d.
-                        d = math_ops.reduce_sum(array_ops.reshape(d, [-1, attn_lengths[i], 1, 1]) * hiddens[i], [1, 2])
-                        _attentions.append(array_ops.reshape(d, [-1, attn_size]))
-            return _attentions
+                        y = array_ops.reshape(y, [batch_size, 1, 1, attn_size])
+                        # Attention mask is a softmax of v' * tanh(...).
+                        s = math_ops.reduce_sum(vector * math_ops.tanh(hidden_features + y), [2, 3])
+                        attention_weights = array_ops.reshape(nn_ops.softmax(s), [batch_size, attn_length, 1, 1])
+                        # Now calculate the attention-weighted vector.
+                        attention = math_ops.reduce_sum(attention_weights * hidden, [1, 2])
+                        attentions_weights.append(array_ops.reshape(attention_weights, [batch_size, attn_length]))
+                        attentions.append(array_ops.reshape(attention, [batch_size, attn_size]))
+            return attentions, attentions_weights
 
-        def _time_step(_time, _, _input, _state, _attentions, _output_ta, _state_ta):
+        def time_step(time, output_ta, state_ta, attentions_weights_ta, _, input, state, attentions):
             with vs.variable_scope("Time-Step"):
                 if loop_function is None:
-                    _input = array_ops.gather(inputs, _time)
+                    input = array_ops.gather(inputs, time)
                 # If loop_function is set, we use it instead of decoder_inputs.
-                x = array_ops.concat([_input] + _attentions, 1) @ W_inp + B_inp
+                x = array_ops.concat([input] + attentions, 1) @ W_inp + B_inp
                 # Run the RNN.
-                cell_output, _state = cell(x, _state)
+                cell_output, state = cell(x, state)
                 # Run the attention mechanism.
-                _attentions = attention(_state)
-                _output = array_ops.concat([cell_output] + _attentions, 1) @ W_out + B_out
+                attentions, attentions_weights = attention(state)
+                output = array_ops.concat([cell_output] + attentions, 1) @ W_out + B_out
                 if loop_function is not None:
-                    _input = loop_function(_output, _time)
+                    input = loop_function(output, time)
+                output_ta = output_ta.write(time, output)
+                state_ta = state_ta.write(time, state)
+                for i, attention_weights in enumerate(attentions_weights):
+                    attentions_weights_ta[i] = attentions_weights_ta[i].write(time, attention_weights)
+            return time + 1, output_ta, state_ta, attentions_weights_ta, output, input, state, attentions
 
-                _output_ta = _output_ta.write(_time, _output)
-                _state_ta = _state_ta.write(_time, _state)
-
-            return _time + 1, _output, _input, _state, _attentions, _output_ta, _state_ta
-
-        _, _, _, _, _, output_final_ta, state_final_ta = control_flow_ops.while_loop(
-            cond=lambda _time, *_: _time < time_steps,
-            body=_time_step,
-            loop_vars=(time, output, inp, state, attentions, output_ta, state_ta)
+        _, output_ta, state_ta, attentions_weights_ta, *_ = control_flow_ops.while_loop(
+            cond=lambda time, *_: time < time_steps,
+            body=time_step,
+            loop_vars=(time, output_ta, state_ta, attentions_weights_ta, output, input, state, attentions)
         )
 
-        final_outputs = output_final_ta.stack()
-        final_states = state_final_ta.stack()
-    return final_outputs, final_states
+        outputs = output_ta.stack()
+        states = state_ta.stack()
+        attentions_weights = [attention_weights_ta.stack() for attention_weights_ta in attentions_weights_ta]
+    return outputs, states, attentions_weights
 
 
 def stack_bidirectional_dynamic_rnn(cells_fw,
@@ -882,29 +878,28 @@ def stack_attention_dynamic_rnn(cells,
         raise ValueError("cells must be a list of RNNCells (one per layer).")
     if initial_states is not None and (not isinstance(cells, list) or len(cells) != len(cells)):
         raise ValueError("initial_states must be a list of state tensors (one per layer).")
-
     if not loop_function and not use_inputs:
         input_size = inputs.get_shape()[2].value
         with vs.variable_scope("LoopFunctionVariables"):
-            W_loop = vs.get_variable("weight", [output_size, input_size], dtype)
-            B_loop = vs.get_variable("bias", [input_size], dtype, init_ops.constant_initializer(0, dtype))
+            W_loop = vs.get_variable(_WEIGHTS_NAME, [output_size, input_size], dtype)
+            B_loop = vs.get_variable(_BIAS_NAME, [input_size], dtype, init_ops.constant_initializer(0, dtype))
 
         def loop_function(prev, _):
             return nn_ops.relu(prev @ W_loop + B_loop)
 
-    res_outputs = []
-    res_states = []
-    prev_outputs = inputs
-
     with vs.variable_scope(scope or "stack_attention_dynamic_rnn"):
+        res_outputs = []
+        res_states = []
+        res_weighs = []
+        outputs = inputs
         for i, cell in enumerate(cells):
             initial_state = None
             if initial_states:
                 initial_state = initial_states[i]
             with vs.variable_scope("cell_%d" % i):
-                prev_outputs, states = attention_dynamic_rnn(
+                outputs, states, weighs = attention_dynamic_rnn(
                     cell,
-                    prev_outputs,
+                    outputs,
                     attention_states,
                     output_size,
                     initial_state,
@@ -912,7 +907,8 @@ def stack_attention_dynamic_rnn(cells,
                     loop_function,
                     dtype)
             loop_function = None
-            res_outputs.append(prev_outputs)
+            res_outputs.append(outputs)
             res_states.append(states)
+            res_weighs.append(weighs)
 
-    return tuple(res_outputs), tuple(res_states)
+    return tuple(res_outputs), tuple(res_states), tuple(res_weighs)
