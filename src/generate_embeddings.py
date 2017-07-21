@@ -45,7 +45,7 @@ def apply(method):
 
 @trace
 def prepare():
-    methods = Dumper.json_load(ALL_METHODS)
+    methods = Dumper.json_load(FULL_DATA_SET)
     with Pool() as pool:
         docs = pool.map(apply, methods)
     docs = [doc for doc in docs if doc is not None]

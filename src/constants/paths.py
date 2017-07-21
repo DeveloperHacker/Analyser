@@ -1,7 +1,7 @@
 RESOURCES = "resources"
 DATA_SETS = RESOURCES + "/data-sets"
-ALL_METHODS = DATA_SETS + "/joda-time.json"
-JODA_TIME_METHODS = DATA_SETS + "/joda-time.json"
+FULL_DATA_SET = DATA_SETS + "/data-set.json"
+JODA_TIME_DATA_SET = DATA_SETS + "/joda-time.json"
 
 LOG = RESOURCES + "/main.log"
 

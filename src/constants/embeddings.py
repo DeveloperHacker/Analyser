@@ -44,8 +44,8 @@ class Embeddings:
     def get_store(self, key):
         if key is None:
             raise ValueError
-        if isinstance(key, int):
-            index = key
+        if isinstance(key, (int, np.number)):
+            index = int(key)
             if index < 0 or index >= len(self.instance):
                 raise Exception("Store with index {} is not found".format(key))
         elif isinstance(key, str):

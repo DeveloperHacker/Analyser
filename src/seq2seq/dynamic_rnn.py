@@ -721,8 +721,8 @@ def attention_dynamic_rnn(
                     input = loop_function(output, time)
                 output_ta = output_ta.write(time, output)
                 state_ta = state_ta.write(time, state)
-                for i, attention_weights in enumerate(attentions_weights):
-                    attentions_weights_ta[i] = attentions_weights_ta[i].write(time, attention_weights)
+                for i in range(num_heads * num_attentions):
+                    attentions_weights_ta[i] = attentions_weights_ta[i].write(time, attentions_weights[i])
             return time + 1, output_ta, state_ta, attentions_weights_ta, output, input, state, attentions
 
         _, output_ta, state_ta, attentions_weights_ta, *_ = control_flow_ops.while_loop(
@@ -733,7 +733,7 @@ def attention_dynamic_rnn(
 
         outputs = output_ta.stack()
         states = state_ta.stack()
-        attentions_weights = [attention_weights_ta.stack() for attention_weights_ta in attentions_weights_ta]
+        attentions_weights = [attentions_weights_ta[i].stack() for i in range(num_attentions * num_heads)]
     return outputs, states, attentions_weights
 
 

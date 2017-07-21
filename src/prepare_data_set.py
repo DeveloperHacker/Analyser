@@ -23,7 +23,7 @@ from contracts.visitors.AstVisitor import AstVisitor
 from config import init
 from constants import embeddings
 from constants.analyser import BATCH_SIZE, SEED
-from constants.paths import ANALYSER_METHODS, JODA_TIME_METHODS
+from constants.paths import ANALYSER_METHODS, JODA_TIME_DATA_SET
 from constants.tags import PARTS, PAD, NOP
 from generate_embeddings import join_java_doc, empty
 from utils import Filter, Dumper
@@ -113,7 +113,7 @@ statistic = Statistic()
 
 @trace
 def prepare_data_set():
-    methods = Dumper.json_load(JODA_TIME_METHODS)
+    methods = Dumper.json_load(JODA_TIME_DATA_SET)
     statistic.num_raw_methods = len(methods)
     with Pool() as pool:
         methods = pool.map(apply, methods)
@@ -257,53 +257,68 @@ def index_java_doc(method):
 
 
 def build_batch(methods: List[dict]):
-    inputs_steps = {
-        label: max([len(method["java-doc"][label]) for method in methods])
-        for label in PARTS
-    }
-    inputs = {label: [] for label in PARTS}
-    inputs_sizes = {label: [] for label in PARTS}
-    pad_index = embeddings.words().get_index(PAD)
+    inputs_steps = {label: max([len(method["java-doc"][label]) for method in methods]) for label in PARTS}
+    docs = {label: [] for label in PARTS}
+    docs_sizes = {label: [] for label in PARTS}
+    pad = embeddings.words().get_index(PAD)
     for method in methods:
         for label in PARTS:
             line = list(method["java-doc"][label])
-            inputs_sizes[label].append(len(line))
+            docs_sizes[label].append(len(line))
             expected = inputs_steps[label] + 1 - len(line)
-            line = line + [pad_index] * expected
-            inputs[label].append(line)
+            line = line + [pad] * expected
+            docs[label].append(line)
     for label in PARTS:
-        inputs[label] = np.transpose(np.asarray(inputs[label]), (1, 0))
-    root_time_steps = []
-    output_time_steps = []
+        docs[label] = np.transpose(np.asarray(docs[label]), (1, 0))
+        docs_sizes[label] = np.asarray(docs_sizes[label])
+    num_conditions = []
+    sequence_length = []
+    strings_lengths = [1]
     for method in methods:
         contract = method["contract"]
-        root_time_steps.append(len(contract))
-        for label, instructions, strings in contract:
-            output_time_steps.append(len(instructions))
-    root_time_steps = max(root_time_steps) + 1
-    output_time_steps = max(output_time_steps)
-    depth = int(np.ceil(np.log2(output_time_steps)))
+        num_conditions.append(len(contract))
+        for raw_label, raw_instructions, raw_strings in contract:
+            sequence_length.append(len(raw_instructions))
+            strings_lengths.extend(len(string) for idx, string in raw_strings.items())
+    string_length = max(strings_lengths)
+    num_conditions = max(num_conditions)
+    sequence_length = max(sequence_length)
+    tree_depth = int(np.ceil(np.log2(sequence_length)))
     output_type = os.environ['OUTPUT_TYPE']
     if output_type == "tree":
-        output_time_steps = 2 ** depth - 1
-    outputs = []
+        sequence_length = 2 ** tree_depth - 1
+    strings_mask = []
+    strings = []
+    tokens = []
     labels = []
-    nop_index = embeddings.tokens().get_index(NOP)
-    empty_sequence = [nop_index for _ in range(output_time_steps)]
+    nop = embeddings.tokens().get_index(NOP)
+    empty_sequence = [nop] * sequence_length
+    empty_string = [0] * string_length
     for method in methods:
-        outputs.append([])
-        labels.append([])
-        for label, instructions, strings in method["contract"]:
-            expected = output_time_steps - len(instructions)
-            line = instructions + [nop_index] * expected
-            outputs[-1].append(line)
-            labels[-1].append(label)
-        expected = root_time_steps - len(outputs[-1])
-        outputs[-1].extend([empty_sequence] * expected)
-        labels[-1].extend([0] * expected)
+        string_mask = [[0] * sequence_length for _ in range(num_conditions)]
+        empty_strings = [[empty_string] * sequence_length for _ in range(num_conditions)]
+        empty_tokens = [empty_sequence] * num_conditions
+        empty_labels = [0] * num_conditions
+        for i, (raw_label, raw_instructions, raw_strings) in enumerate(method["contract"]):
+            empty_labels[i] = raw_label
+            raw_instructions = raw_instructions + [nop] * (sequence_length - len(raw_instructions))
+            empty_tokens[i] = raw_instructions
+            for idx, raw_string in raw_strings.items():
+                raw_string = raw_string + [pad] * (string_length - len(raw_string))
+                empty_strings[i][idx] = raw_string
+                string_mask[i][idx] = 1
+        strings_mask.append(string_mask)
+        strings.append(empty_strings)
+        tokens.append(empty_tokens)
+        labels.append(empty_labels)
     labels = np.asarray(labels)
-    outputs = np.asarray(outputs)
-    return inputs, inputs_sizes, labels, outputs, root_time_steps, output_time_steps, depth
+    tokens = np.asarray(tokens)
+    strings = np.asarray(strings)
+    strings_mask = np.asarray(strings_mask)
+    inputs = (docs, docs_sizes)
+    outputs = (labels, tokens, strings, strings_mask)
+    parameters = (num_conditions, sequence_length, string_length, tree_depth)
+    return inputs, outputs, parameters
 
 
 if __name__ == '__main__':

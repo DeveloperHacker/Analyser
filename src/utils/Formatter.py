@@ -1,17 +1,6 @@
 import logging
 
-from typing import Iterable, Any
-
-
-def chunks(iterable: Iterable[Any], block_size: int):
-    result = []
-    for element in iterable:
-        result.append(element)
-        if len(result) == block_size:
-            yield result
-            result = []
-    if len(result) > 0:
-        yield result
+from typing import Iterable
 
 
 class Formatter:
@@ -49,6 +38,9 @@ class Formatter:
         self._delimiter = self.BVD + self.VD.join(delimiter_segments) + self.BVD
         self._upper_delimiter = self.LUBVD + self.UVD.join(delimiter_segments) + self.RUBVD
         self._lower_delimiter = self.LLBVD + self.LVD.join(delimiter_segments) + self.RLBVD
+        # self._delimiter = self.BVD + self.HD.join(delimiter_segments) + self.BVD
+        # self._upper_delimiter = self.LUBVD + self.HD.join(delimiter_segments) + self.RUBVD
+        # self._lower_delimiter = self.LLBVD + self.HD.join(delimiter_segments) + self.RLBVD
         self._head = self._head.format(segments=self._heads)
 
     @staticmethod
@@ -83,25 +75,6 @@ class Formatter:
     def print_head_text(self):
         self._print(self._head)
 
-    def print_appendix(self, text: str, prefix: str = None):
-        for line in text.split("\n"):
-            size = sum(self._sizes[row] for row in self._rows) + len(self._rows) + 1 - 4
-            if prefix is not None:
-                left_size = self._sizes[self._rows[0]] if len(self._rows) > 0 else 0
-                left_size = max(0, left_size - 2)
-                right_size = size - left_size - 3
-                for _line in chunks(line, right_size):
-                    _line = "".join(_line).strip()
-                    formatter = "{{}} {{:{}s}} {{}} {{:{}s}} {{}}".format(left_size, right_size)
-                    _line = formatter.format(self.BVD, prefix, self.VD, _line, self.BVD)
-                    self._print(_line)
-                    prefix = ""
-            else:
-                for _line in chunks(line, size):
-                    _line = "".join(_line).strip()
-                    _line = "{{}} {{:{}s}} {{}}".format(size).format(self.BVD, _line, self.BVD)
-                    self._print(_line)
-
     @property
     def height(self):
         return self._height
@@ -110,3 +83,10 @@ class Formatter:
     def height(self, height: int):
         self._height = height
         self._row = self._height or 0
+
+    @property
+    def size(self):
+        return sum(self._sizes[row] for row in self._rows) + len(self._rows) + 1
+
+    def row_size(self, row_number):
+        return self._sizes[row_number]
