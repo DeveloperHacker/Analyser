@@ -1,36 +1,40 @@
 import itertools
-from typing import Iterable
+from typing import Iterable, Any, List
 
 import numpy as np
+import tensorflow as tf
 
 from constants import embeddings
 from constants.tags import NOP, PARTS
 
 
-def greedy_correct(labels_targets, outputs_targets, outputs):
-    outputs_targets_values = np.asarray(embeddings.tokens().idx2emb)[outputs_targets]
+def greedy_correct(targets, outputs):
+    labels_targets, tokens_targets, strings_targets, strings_mask = targets
+    labels, tokens, strings = outputs
+    tokens_targets_values = np.asarray(embeddings.tokens().idx2emb)[tokens_targets]
     result_labels = []
-    result_outputs = []
-    batch_size = outputs.shape[0]
-    contract_size = outputs.shape[1]
+    result_tokens = []
+    result_strings = []
+    result_strings_mask = []
+    batch_size = tokens.shape[0]
+    contract_size = tokens.shape[1]
     for i in range(batch_size):
-        output = outputs[i]
-        label_target = labels_targets[i]
-        output_target = outputs_targets[i]
-        output_target_values = outputs_targets_values[i]
         from_indexes = list(range(contract_size))
         to_indexes = list(range(contract_size))
         result_label = [None] * contract_size
-        result_output = [None] * contract_size
+        result_token = [None] * contract_size
+        result_string = [None] * contract_size
+        result_string_mask = [None] * contract_size
         while len(from_indexes) > 0:
             index_best_from_index = None
             index_best_to_index = None
             best_distance = None
             for j, from_index in enumerate(from_indexes):
                 for k, to_index in enumerate(to_indexes):
-                    from_output = output_target_values[from_index]
-                    to_output = output[to_index]
-                    distance = np.linalg.norm(from_output[1:] - to_output[1:])
+                    from_output = tokens_targets_values[i][from_index]
+                    to_output = tokens[i][to_index]
+                    distance = np.linalg.norm(from_output - to_output)
+                    # distance = np.sum(from_output * to_output)
                     if best_distance is None or distance < best_distance:
                         index_best_from_index = j
                         index_best_to_index = k
@@ -39,11 +43,52 @@ def greedy_correct(labels_targets, outputs_targets, outputs):
             best_to_index = to_indexes[index_best_to_index]
             del from_indexes[index_best_from_index]
             del to_indexes[index_best_to_index]
-            result_label[best_to_index] = label_target[best_from_index]
-            result_output[best_to_index] = output_target[best_from_index]
+            result_label[best_to_index] = labels_targets[i][best_from_index]
+            result_token[best_to_index] = tokens_targets[i][best_from_index]
+            result_string[best_to_index] = strings_targets[i][best_from_index]
+            result_string_mask[best_to_index] = strings_mask[i][best_from_index]
         result_labels.append(result_label)
-        result_outputs.append(result_output)
-    return np.asarray(result_labels), np.asarray(result_outputs)
+        result_tokens.append(result_token)
+        result_strings.append(result_string)
+        result_strings_mask.append(result_string_mask)
+    result_labels = np.asarray(result_labels)
+    result_tokens = np.asarray(result_tokens)
+    result_strings = np.asarray(result_strings)
+    result_strings_mask = np.asarray(result_strings_mask)
+    return result_labels, result_tokens, result_strings, result_strings_mask
+
+
+def nearest_correct(targets, outputs, fine_weigh):
+    labels_targets, tokens_targets, strings_targets, strings_mask = targets
+    labels, tokens, strings = outputs
+    tokens_targets_values = np.asarray(embeddings.tokens().idx2emb)[tokens_targets]
+    result_labels = []
+    result_tokens = []
+    result_strings = []
+    result_strings_mask = []
+    batch_size = tokens.shape[0]
+    contract_size = tokens.shape[1]
+    for i in range(batch_size):
+        default_indexes = np.arange(contract_size)
+        best_indices = None
+        for indexes in itertools.permutations(default_indexes):
+            list_indexes = list(indexes)
+            perm = tokens_targets_values[i][list_indexes]
+            distance = np.linalg.norm(perm[1:] - tokens[i][1:])
+            fine = fine_weigh * np.linalg.norm(default_indexes - indexes)
+            distance = distance + fine
+            if best_distance is None or distance < best_distance:
+                best_indices = list_indexes
+                best_distance = distance
+        result_labels.append(labels_targets[i][best_indices])
+        result_tokens.append(tokens_targets[i][best_indices])
+        result_strings.append(strings_targets[i][best_indices])
+        result_strings_mask.append(strings_mask[i][best_indices])
+    result_labels = np.asarray(result_labels)
+    result_tokens = np.asarray(result_tokens)
+    result_strings = np.asarray(result_strings)
+    result_strings_mask = np.asarray(result_strings_mask)
+    return result_labels, result_tokens, result_strings, result_strings_mask
 
 
 def calc_accuracy(outputs_targets, outputs, labels_targets=None, labels=None):
@@ -84,35 +129,6 @@ def calc_accuracy(outputs_targets, outputs, labels_targets=None, labels=None):
         false_negative.append(len(target_indexes))
         false_positive.append(_false_accept)
     return true_positive, true_negative, false_negative, false_positive
-
-
-def nearest_correct(labels_targets, outputs_targets, outputs, fine_weigh):
-    outputs_targets_values = np.asarray(embeddings.tokens().idx2emb)[outputs_targets]
-    result_labels = []
-    result_outputs = []
-    batch_size = outputs.shape[0]
-    contract_size = outputs.shape[1]
-    for i in range(batch_size):
-        output = outputs[i]
-        label_target = labels_targets[i]
-        output_target = outputs_targets[i]
-        output_target_values = outputs_targets_values[i]
-        best_output = None
-        best_distance = None
-        default_indexes = np.arange(contract_size)
-        for indexes in itertools.permutations(default_indexes):
-            list_indexes = list(indexes)
-            perm = output_target_values[list_indexes]
-            distance = np.linalg.norm(perm[1:] - output[1:])
-            fine = fine_weigh * np.linalg.norm(default_indexes - indexes)
-            distance = distance + fine
-            if best_distance is None or distance < best_distance:
-                best_label = label_target[list_indexes]
-                best_output = output_target[list_indexes]
-                best_distance = distance
-        result_labels.append(best_label)
-        result_outputs.append(best_output)
-    return np.asarray(result_labels), np.asarray(result_outputs)
 
 
 def transpose_mask(attention_mask, num_heads):
@@ -243,9 +259,22 @@ def print_doc(formatter, indexed_doc, words_weighs):
         text = text.format(mean, variance, minimum, maximum)
         formatter.print("", "")
         formatter.print("", " " + next(cut(text, text_size)))
-        words = (embeddings.words().get_name(int(i)) for i in indexed_doc[i])
+        words = (embeddings.words().get_name(i) for i in indexed_doc[i])
         weighs = top_k_normalization(6, words_weighs[i])
         # weighs = normalization(words_weighs[i])
         words = colorize_words(words, weighs)
         for line in cut(" ".join(words), text_size):
             formatter.print(label, " " + line)
+
+
+def cross_entropy_loss(targets, logits):
+    with tf.variable_scope("cross_entropy_loss"):
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+        loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
+    return loss
+
+
+def l2_loss(variables):
+    with tf.variable_scope("l2_loss"):
+        loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
+    return loss

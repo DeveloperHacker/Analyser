@@ -8,27 +8,15 @@ from tensorflow.python.ops.rnn_cell_impl import GRUCell
 
 from config import init
 from constants.analyser import *
-from constants.paths import ANALYSER, ANALYSER_METHODS, ANALYSER_SUMMARIES
+from constants.paths import ANALYSER, ANALYSER_METHODS, ANALYSER_SUMMARIES, ANALYSER_GRAPH
 from constants.tags import PAD
 from seq2seq.Net import Net
 from seq2seq.analyser_rnn import *
 from seq2seq.utils import *
-from utils import Dumper
+from seq2seq.utils import cross_entropy_loss, l2_loss
+from utils import dumpers
 from utils.Formatter import Formatter
-from utils.wrapper import trace
-
-
-def cross_entropy_loss(targets, logits):
-    with vs.variable_scope("cross_entropy_loss"):
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
-    return loss
-
-
-def l2_loss(variables):
-    with vs.variable_scope("l2_loss"):
-        loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-    return loss
+from utils.wrappers import trace
 
 
 class AnalyserNet(Net):
@@ -36,7 +24,6 @@ class AnalyserNet(Net):
     def __init__(self):
         super().__init__("analyser", ANALYSER)
         with vs.variable_scope(self.name):
-            _embeddings = tf.constant(np.asarray(embeddings.words().idx2emb))
             self.docs = {}
             self.embeddings = {}
             self.docs_sizes = {}
@@ -45,7 +32,7 @@ class AnalyserNet(Net):
             for label in PARTS:
                 label = label[1:]
                 indexes = tf.placeholder(tf.int32, [BATCH_SIZE, None], "indexes_%s" % label)
-                self.embeddings[label] = tf.gather(_embeddings, indexes)
+                self.embeddings[label] = tf.gather(tf.constant(np.asarray(embeddings.words().idx2emb)), indexes)
                 self.docs[label] = indexes
                 self.docs_sizes[label] = tf.placeholder(tf.int32, [BATCH_SIZE], "input_sizes_%s" % label)
                 cells_fw[label] = [GRUCell(INPUTS_STATE_SIZE) for _ in range(NUM_ENCODERS)]
@@ -84,7 +71,7 @@ class AnalyserNet(Net):
             self.scope = vs.get_variable_scope().name
             self.loss, self.complex_loss = self.build_loss()
         self.optimizer = tf.train.AdamOptimizer().minimize(self.complex_loss)
-        self._data_set = Dumper.pkl_load(ANALYSER_METHODS)
+        self._data_set = dumpers.pkl_load(ANALYSER_METHODS)
         self.add_variable_summaries()
         self.summaries = tf.summary.merge_all()
 
@@ -126,7 +113,7 @@ class AnalyserNet(Net):
     @property
     def data_set(self) -> (list, list, list):
         data_set = list(self._data_set)
-        data_set_length = len(self._data_set)
+        data_set_length = len(data_set)
         not_allocated = data_set_length
         test_set_length = min(not_allocated, int(data_set_length * TEST_SET))
         not_allocated -= test_set_length
@@ -153,11 +140,16 @@ class AnalyserNet(Net):
 
     def correct_target(self, feed_dict, outputs) -> dict:
         labels_targets = feed_dict[self.labels_targets]
-        outputs_targets = feed_dict[self.tokens_targets]
-        labels_targets, outputs_targets = greedy_correct(labels_targets, outputs_targets, outputs)
-        # labels_targets, outputs_targets = nearest_correct(labels_target, outputs_target, outputs, 0.5)
+        tokens_targets = feed_dict[self.tokens_targets]
+        strings_targets = feed_dict[self.strings_targets]
+        strings_mask = feed_dict[self.strings_mask]
+        targets = (labels_targets, tokens_targets, strings_targets, strings_mask)
+        labels_targets, tokens_targets, strings_targets, strings_mask = greedy_correct(targets, outputs)
+        # labels_targets, tokens_targets, strings_targets, strings_mask = nearest_correct(targets, outputs, 0.5)
         feed_dict[self.labels_targets] = labels_targets
-        feed_dict[self.tokens_targets] = outputs_targets
+        feed_dict[self.tokens_targets] = tokens_targets
+        feed_dict[self.strings_targets] = strings_targets
+        feed_dict[self.strings_mask] = strings_mask
         return feed_dict
 
     @trace
@@ -196,16 +188,18 @@ class AnalyserNet(Net):
                     start = time.time()
                     for batch in train_set:
                         feed_dict = self.build_feed_dict(batch)
-                        tokens = session.run(self.raw_tokens, feed_dict)
-                        feed_dict = self.correct_target(feed_dict, tokens)
+                        fetches = (self.raw_labels, self.raw_tokens, self.raw_strings)
+                        outputs = session.run(fetches, feed_dict)
+                        feed_dict = self.correct_target(feed_dict, outputs)
                         session.run(self.optimizer, feed_dict)
                     train_losses = []
                     train_true_positive, train_true_negative = [], []
                     train_false_negative, train_false_positive = [], []
                     for batch in train_set:
                         feed_dict = self.build_feed_dict(batch)
-                        tokens = session.run(self.raw_tokens, feed_dict)
-                        feed_dict = self.correct_target(feed_dict, tokens)
+                        fetches = (self.raw_labels, self.raw_tokens, self.raw_strings)
+                        outputs = session.run(fetches, feed_dict)
+                        feed_dict = self.correct_target(feed_dict, outputs)
                         train_losses.append(session.run(self.loss, feed_dict))
                         labels, tokens = session.run((self.raw_labels, self.raw_tokens), feed_dict)
                         tokens = np.argmax(tokens, 3)
@@ -223,8 +217,9 @@ class AnalyserNet(Net):
                     validation_false_negative, validation_false_positive = [], []
                     for batch in validation_set:
                         feed_dict = self.build_feed_dict(batch)
-                        tokens = session.run(self.raw_tokens, feed_dict)
-                        feed_dict = self.correct_target(feed_dict, tokens)
+                        fetches = (self.raw_labels, self.raw_tokens, self.raw_strings)
+                        outputs = session.run(fetches, feed_dict)
+                        feed_dict = self.correct_target(feed_dict, outputs)
                         validation_losses.append(session.run(self.loss, feed_dict))
                         labels, tokens = session.run((self.raw_labels, self.raw_tokens), feed_dict)
                         tokens = np.argmax(tokens, 3)
@@ -263,7 +258,7 @@ class AnalyserNet(Net):
                     smoothed_true_positive_graph.append(epoch, validation_true_positive)
                     formatter.print(epoch, delay, train_accuracy, train_loss, validation_accuracy, validation_loss)
                     figure.draw()
-                    figure.save(self.folder_path + "/train.png")
+                    figure.save(ANALYSER_GRAPH)
                     writer.add_summary(session.run(self.summaries))
                     writer.flush()
                     if np.isnan(train_loss) or np.isnan(validation_loss):
@@ -273,7 +268,7 @@ class AnalyserNet(Net):
             logging.info(ex)
         finally:
             writer.close()
-            figure.save(self.folder_path + "/train.png")
+            figure.save(ANALYSER_GRAPH)
             ProxyFigure.destroy()
 
     @trace
@@ -294,7 +289,8 @@ class AnalyserNet(Net):
             train_set, validation_set, test_set = self.data_set
             for batch in test_set:
                 feed_dict = self.build_feed_dict(batch)
-                outputs = session.run(self.raw_tokens, feed_dict)
+                fetches = (self.raw_labels, self.raw_tokens, self.raw_strings)
+                outputs = session.run(fetches, feed_dict)
                 feed_dict = self.correct_target(feed_dict, outputs)
                 fetches = (self.num_conditions, self.sequence_length, self.labels_targets, self.tokens_targets)
                 root_time_steps, output_time_steps, labels_targets, outputs_targets = session.run(fetches, feed_dict)
@@ -321,8 +317,8 @@ class AnalyserNet(Net):
                         label_target = labels_targets[i][j]
                         _top_labels_indices = top_labels_indices[i][j]
                         _top_labels_probabilities = top_labels_probabilities[i][j]
-                        label_target = embeddings.labels().get_name(int(label_target))
-                        _top_labels_indices = (embeddings.labels().get_name(int(i)) for i in _top_labels_indices)
+                        label_target = embeddings.labels().get_name(label_target)
+                        _top_labels_indices = (embeddings.labels().get_name(i) for i in _top_labels_indices)
                         labels = (e for p in zip(_top_labels_indices, _top_labels_probabilities) for e in p)
                         reminder = ["", 0.0] * (TOP - 2)
                         formatter.print(loss, accuracy, label_target, *labels, *reminder)
@@ -330,8 +326,8 @@ class AnalyserNet(Net):
                             output_target = outputs_targets[i][j][k]
                             _top_outputs_indices = top_outputs_indices[i][j][k]
                             _top_outputs_probabilities = top_outputs_probabilities[i][j][k]
-                            output_target = embeddings.tokens().get_name(int(output_target))
-                            _top_outputs_indices = (embeddings.tokens().get_name(int(i)) for i in _top_outputs_indices)
+                            output_target = embeddings.tokens().get_name(output_target)
+                            _top_outputs_indices = (embeddings.tokens().get_name(i) for i in _top_outputs_indices)
                             outputs = (e for p in zip(_top_outputs_indices, _top_outputs_probabilities) for e in p)
                             formatter.print(loss, accuracy, output_target, *outputs)
                         appendix_formatter.print_delimiter()
@@ -376,10 +372,10 @@ class AnalyserNet(Net):
                 for not_first, (li_i, lp_i, oi_i, op_i) in enumerate(zip(li, lp, oi, op)):
                     if not_first:
                         formatter.print_delimiter()
-                    li_i = (embeddings.labels().get_name(int(i)) for i in li_i)
+                    li_i = (embeddings.labels().get_name(i) for i in li_i)
                     formatter.print(*(elem for pair in zip(li_i, lp_i) for elem in pair), "", 0.0)
                     for oi_ij, op_ij in zip(oi_i, op_i):
-                        oi_ij = (embeddings.tokens().get_name(int(i)) for i in oi_ij)
+                        oi_ij = (embeddings.tokens().get_name(i) for i in oi_ij)
                         formatter.print(*(elem for pair in zip(oi_ij, op_ij) for elem in pair))
                 formatter.print_lower_delimiter()
 

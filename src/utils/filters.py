@@ -16,7 +16,7 @@ def isKeyWord(string) -> bool:
     return False
 
 
-def filterStrings(string: str) -> str:
+def filterString(string: str) -> str:
     return re.sub("\".*?[^\\\]\"", " %s " % STRING, string)
 
 
@@ -67,11 +67,11 @@ def filterNumbers(string: str) -> str:
 
 
 def filterConstants(string: str) -> str:
-    string = re.sub(r"true", " %s " % TRUE, string)
-    string = re.sub(r"false", " %s " % FALSE, string)
-    string = re.sub(r"null", " %s " % NULL, string)
-    string = re.sub(r"nil", " %s " % NULL, string)
-    string = re.sub(r"none", " %s " % NULL, string)
+    string = re.sub(r" true ", " %s " % TRUE, string)
+    string = re.sub(r" false ", " %s " % FALSE, string)
+    string = re.sub(r" null ", " %s " % NULL, string)
+    string = re.sub(r" nil ", " %s " % NULL, string)
+    string = re.sub(r" none ", " %s " % NULL, string)
     return string
 
 
@@ -98,9 +98,7 @@ def unpackStableReduction(string: str) -> str:
 
 
 def expandWordsAndSymbols(string: str) -> str:
-    PUNCTUATION = (".", ",", ":", ";", "(", ")", "{", "}")
-    regex = "(" + "|".join("\\" + symbol for symbol in PUNCTUATION) + ")"
-    return re.sub(regex, r" \1 ", string)
+    return re.sub(r"(\.|\,|\:|\;|\(|\)|\{|\}|\-\-)", r" \1 ", string)
 
 
 def filterLongSpaces(string: str) -> str:
@@ -120,23 +118,24 @@ def convert(name):
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
-def applyFiltersForString(string: str, params: list) -> str:
+def apply_filters(string: str, params: list) -> str:
     if string is None or params is None:
         raise ValueError("arguments must be not None")
     if len(string) == 0: return string
     string = string.lower()
-    string = filterStrings(string)
+    string = " %s " % string
+    string = filterString(string)
     string = filterTags(string)
     string = filterRefs(string)
     string = filterLinks(string)
     string = filterStableReduction(string)
     string = filterURLs(string)
     string = filterNumbers(string)
-    string = filterConstants(string)
     string = filterParamNames(string, params)
     string = filterFunctionInvocation(string)
     # string = filterDotTuple(string)
     string = expandWordsAndSymbols(string)
+    string = filterConstants(string)
     # string = filterMeaninglessSentences(string)
     string = unpackStableReduction(string)
     string = filterLongSpaces(string)
@@ -147,11 +146,11 @@ def applyFiltersForString(string: str, params: list) -> str:
 def apply(method):
     params = [param["name"] for param in method["description"]["parameters"]]
     method["java-doc"] = {
-        label: [applyFiltersForString(param, params) for param in text]
+        label: [apply_filters(param, params) for param in text]
         for label, text in method["java-doc"].items()
     }
     method["java-doc"][VARIABLE] = [
-        "%s%d %s" % (VARIABLE, i, applyFiltersForString(convert(name).replace(r"_", " "), params))
+        "%s%d %s" % (VARIABLE, i, apply_filters(convert(name).replace(r"_", " "), params))
         for i, name in enumerate(params)
     ]
     return method

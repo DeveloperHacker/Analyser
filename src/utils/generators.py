@@ -4,7 +4,7 @@ from multiprocessing.pool import Pool
 import numpy as np
 from sklearn.cluster import KMeans as _KMeans
 
-from utils.wrapper import trace
+from utils.wrappers import trace
 
 
 def maximum(_, tar_value, data):

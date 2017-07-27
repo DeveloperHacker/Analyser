@@ -5,8 +5,8 @@ import tensorflow as tf
 from config import init
 from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
 from constants.paths import *
-from utils import Dumper, Filter, Generator
-from utils.wrapper import trace
+from utils import dumpers, filters, generators
+from utils.wrappers import trace
 from word2vec import word2vec_optimized as word2vec
 
 
@@ -20,10 +20,7 @@ def empty(method):
 def join_java_doc(method):
     java_doc = {}
     for label, text in method["java-doc"].items():
-        if label == "head":
-            java_doc[label] = " ".join(text)
-        else:
-            java_doc[label] = (" %s " % Filter.NEXT).join(text)
+        java_doc[label] = " ".join(text)
     method["java-doc"] = java_doc
     return method
 
@@ -37,7 +34,7 @@ def extract_docs(method):
 def apply(method):
     if empty(method):
         return None
-    method = Filter.apply(method)
+    method = filters.apply(method)
     method = join_java_doc(method)
     doc = extract_docs(method)
     return doc
@@ -45,7 +42,7 @@ def apply(method):
 
 @trace
 def prepare():
-    methods = Dumper.json_load(FULL_DATA_SET)
+    methods = dumpers.json_load(FULL_DATA_SET)
     with Pool() as pool:
         docs = pool.map(apply, methods)
     docs = [doc for doc in docs if doc is not None]
@@ -69,14 +66,14 @@ def generate():
         model.saver.save(session, GENERATOR_MODEL)
         emb = model.w_in.eval(session)
         embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in model.word2id.items()}
-    Dumper.pkl_dump(embeddings, EMBEDDINGS)
+    dumpers.pkl_dump(embeddings, EMBEDDINGS)
 
 
 @trace
 def cluster():
-    embeddings = Dumper.pkl_load(EMBEDDINGS)
-    clusters = Generator.classifiers.kneighbors(embeddings, 0.1)
-    Generator.show.kneighbors(clusters)
+    embeddings = dumpers.pkl_load(EMBEDDINGS)
+    clusters = generators.classifiers.kneighbors(embeddings, 0.1)
+    generators.show.kneighbors(clusters)
 
 
 if __name__ == '__main__':

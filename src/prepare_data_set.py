@@ -1,210 +1,207 @@
 import itertools
 import os
 import random
-from multiprocessing import Value
-from multiprocessing.pool import Pool
-from typing import List, Any, Iterable
+from typing import List, Any, Iterable, Tuple
 
 import numpy as np
 from contracts.guides.AstBfsGuide import AstBfsGuide
 from contracts.guides.AstDfsGuide import AstDfsGuide
 from contracts.nodes.Ast import Ast
+from contracts.nodes.Node import Node
 from contracts.nodes.StringNode import StringNode
 from contracts.parser import Parser
 from contracts.tokens import tokens
-from contracts.tokens.LabelToken import LabelToken
-from contracts.tokens.MarkerToken import MarkerToken
-from contracts.tokens.PredicateToken import PredicateToken
-from contracts.tokens.Token import Token
+from contracts.tokens.tokens import WEAK
 from contracts.visitors.AstCompiler import AstCompiler
-from contracts.visitors.AstEqualReducer import AstEqualReducer
+from contracts.visitors.AstDecompiler import AstDecompiler
 from contracts.visitors.AstVisitor import AstVisitor
 
 from config import init
 from constants import embeddings
-from constants.analyser import BATCH_SIZE, SEED
-from constants.paths import ANALYSER_METHODS, JODA_TIME_DATA_SET
+from constants.analyser import BATCH_SIZE
+from constants.paths import JODA_TIME_DATA_SET, ANALYSER_METHODS
 from constants.tags import PARTS, PAD, NOP
 from generate_embeddings import join_java_doc, empty
-from utils import Filter, Dumper
+from utils import filters, dumpers
 from utils.Formatter import Formatter
-from utils.wrapper import trace
-
-
-class StringFiltrator(AstVisitor):
-    def __init__(self, method):
-        super().__init__()
-        self._tree = None
-        self._params = [param["name"] for param in method["description"]["parameters"]]
-
-    def visit(self, ast: Ast):
-        self._tree = ast
-
-    def result(self):
-        return self._tree
-
-    def visit_string(self, node: StringNode):
-        string = " ".join(node.words)
-        string = Filter.applyFiltersForString(string, self._params)
-        node.words = string.split(" ")
+from utils.wrappers import trace
 
 
 class Statistic:
+    class Accountant:
+        def __init__(self):
+            self._methods_counter = 0
+            self._token_counters = {token: 0 for token in itertools.chain(tokens.predicates(), tokens.markers())}
+            self._label_counters = {token: 0 for token in tokens.labels()}
+
+        def consider(self, method):
+            self._methods_counter += 1
+            for label, instructions, strings in method["contract"]:
+                for instruction in instructions:
+                    token = instruction.token
+                    self._token_counters[token.name] += 1
+                self._label_counters[label.name] += 1
+            return method
+
+        @property
+        def tokens(self) -> Iterable[Tuple[str, int]]:
+            return self._token_counters.items()
+
+        @property
+        def labels(self) -> Iterable[Tuple[str, int]]:
+            return self._label_counters.items()
+
+        @property
+        def num_tokens(self) -> int:
+            return sum(counter for counter in self._token_counters.values())
+
+        @property
+        def num_labels(self):
+            return sum(counter for counter in self._label_counters.values())
+
+        @property
+        def num_methods(self) -> int:
+            return self._methods_counter
+
     def __init__(self):
-        self.predicate_counters = {
-            token: Value("i", 0) for token in tokens.predicates()
-        }
-        self.marker_counters = {
-            token: Value("i", 0) for token in tokens.markers()
-        }
-        self.label_counters = {
-            token: Value("i", 0) for token in tokens.labels()
-        }
-        self.num_raw_methods = None
-        self.num_methods = None
-        self.num_batches = None
-
-    def count(self, token: Token):
-        if isinstance(token, PredicateToken):
-            counter = self.predicate_counters[token.name]
-        elif isinstance(token, MarkerToken):
-            counter = self.marker_counters[token.name]
-        elif isinstance(token, LabelToken):
-            counter = self.label_counters[token.name]
-        else:
-            raise ValueError(type(token))
-        with counter.get_lock():
-            counter.value += 1
-
-    def num_tokens(self) -> int:
-        predicates = sum(counter.value for counter in self.predicate_counters.values())
-        markers = sum(counter.value for counter in self.marker_counters.values())
-        labels = sum(counter.value for counter in self.label_counters.values())
-        return predicates + markers + labels
+        self.before = Statistic.Accountant()
+        self.after = Statistic.Accountant()
 
     def show(self):
-        method_concentration = self.num_methods / self.num_raw_methods * 100
-        num_tokens = self.num_tokens()
-        values = []
-        counters = itertools.chain(
-            self.predicate_counters.items(),
-            self.marker_counters.items(),
-            self.label_counters.items()
-        )
-        for token_name, counter in counters:
-            number = counter.value
-            concentration = number / num_tokens * 100
-            values.append((token_name, number, concentration))
-        values = sorted(values, key=lambda x: x[1], reverse=True)
-        formatter = Formatter(("Name", "Number", "Concentration"), ("s", "d", "s"), (20, 20, 20), (0, 1, 2))
+        formatter = Formatter(("name", "before", "after"), ("s", "d", "d"), (20, 20, 20), (0, 1, 2))
         formatter.print_head()
-        formatter.print("raw methods", self.num_raw_methods, "")
-        formatter.print("methods", self.num_methods, "%.1f%%" % method_concentration)
-        formatter.print("batches", self.num_batches, "")
-        formatter.print("tokens", num_tokens, "")
+        formatter.print("methods", self.before.num_methods, self.after.num_methods)
+        formatter.print("labels", self.before.num_labels, self.after.num_labels)
+        formatter.print("tokens", self.before.num_tokens, self.after.num_tokens)
         formatter.print_delimiter()
-        for token_name, number, concentration in values:
-            formatter.print(token_name, number, "%.1f%%" % concentration)
+        values = []
+        for before, after in zip(self.before.labels, self.after.labels):
+            assert before[0] == after[0]
+            values.append((before[0], before[1], after[1]))
+        for name, before, after in sorted(values, key=lambda x: x[1], reverse=True):
+            formatter.print(name, before, after)
+        formatter.print_delimiter()
+        values = []
+        for before, after in zip(self.before.tokens, self.after.tokens):
+            assert before[0] == after[0]
+            values.append((before[0], before[1], after[1]))
+        for name, before, after in sorted(values, key=lambda x: x[1], reverse=True):
+            formatter.print(name, before, after)
         formatter.print_lower_delimiter()
 
 
-statistic = Statistic()
-
-
-@trace
-def prepare_data_set():
-    methods = Dumper.json_load(JODA_TIME_DATA_SET)
-    statistic.num_raw_methods = len(methods)
-    with Pool() as pool:
-        methods = pool.map(apply, methods)
-        methods = [method for method in methods if method is not None]
-        statistic.num_methods = len(methods)
-        methods = pool.map(build_batch, batching(methods))
-        statistic.num_batches = len(methods)
-    random.shuffle(methods, lambda: random.Random(SEED).uniform(0, 1))
-    Dumper.pkl_dump(methods, ANALYSER_METHODS)
-    statistic.show()
-
-
-def apply(method):
-    try:
-        method = parse_contract(method)
-        if len(method["contract"]) == 0: return None
-        method = filter_contract(method)
-        if len(method["contract"]) == 0: return None
-        method = standardify_contract(method)
-        method = filter_contract_text(method)
-        method = index_contract(method)
-        method = Filter.apply(method)
-        if empty(method): return None
-        method = join_java_doc(method)
-        method = index_java_doc(method)
-    except Exception:
-        raise ValueError()
-    return method
-
-
 def standardify_contract(method):
-    reducer = AstDfsGuide(AstEqualReducer())
+    class AstMapper(AstVisitor):
+        def __init__(self, map_function):
+            self.tree = None
+            self.map = map_function
+
+        def visit_end(self, ast: Ast):
+            ast.root = self.map(ast.root)
+            self.tree = ast
+
+        def visit_node_end(self, node: Node):
+            children = [self.map(child) for child in node.children]
+            node.children = children
+
+        def result(self):
+            return self.tree
+
+    def reduce(node: Node):
+        parent = node.parent
+        if node.token == tokens.NOT_EQUAL:
+            assert node.children is not None
+            assert len(node.children) == 2
+            left = node.children[0]
+            right = node.children[1]
+            if left.token == tokens.FALSE:
+                node = right
+            elif right.token == tokens.FALSE:
+                node = left
+            elif left.token == tokens.TRUE:
+                node.token = tokens.EQUAL
+                left.token = tokens.FALSE
+                node.children = [right, left]
+            elif right.token == tokens.TRUE:
+                node.token = tokens.EQUAL
+                right.token = tokens.FALSE
+        if node.token == tokens.EQUAL:
+            assert node.children is not None
+            assert len(node.children) == 2
+            left = node.children[0]
+            right = node.children[1]
+            if left.token == tokens.TRUE:
+                node = right
+            elif right.token == tokens.TRUE:
+                node = left
+            elif left.token == tokens.FALSE:
+                node.children = [right, left]
+        node.parent = parent
+        return node
+
+    def expand(node: Node):
+        children = (tokens.PARAM, tokens.PARAM_0, tokens.PARAM_1, tokens.PARAM_2, tokens.PARAM_3, tokens.PARAM_4,
+                    tokens.RESULT, tokens.STRING, tokens.GET)
+        if node.token in children and (node.parent is None or node.parent.token == tokens.FOLLOW):
+            node = Node(tokens.EQUAL, (node, Node(tokens.TRUE)), node.parent)
+        return node
+
+    reducer = AstDfsGuide(AstMapper(reduce))
+    expander = AstDfsGuide(AstMapper(expand))
     compiler = AstDfsGuide(AstCompiler())
     forest = (Parser.parse_tree(*args) for args in method["contract"])
     forest = (reducer.accept(tree) for tree in forest)
+    forest = list(expander.accept(tree) for tree in forest)
+    decompiler = AstDfsGuide(AstDecompiler())
+    for tree in forest:
+        print(decompiler.accept(tree))
     method["contract"] = [compiler.accept(tree) for tree in forest]
     return method
 
 
 def filter_contract(method):
-    new_tokens = {tokens.POST_THIS.name, tokens.PRE_THIS.name, tokens.THIS.name, tokens.GET.name}
-    contract = []
-    for label, instructions, strings in method["contract"]:
-        instructions_names = set(instruction.token.name for instruction in instructions)
-        intersection = instructions_names & new_tokens
-        # if tokens.NULL.name in instructions_names:
-        if len(intersection) == 0:
-            contract.append((label, instructions, strings))
-    method["contract"] = contract
+    method["contract"] = [
+        (label, instructions, strings)
+        for label, instructions, strings in method["contract"]
+        if label != WEAK
+    ]
     return method
 
 
-def vectorize(method) -> List[int]:
-    result = []
-    # result.extend(len(method["java-doc"][label]) for label in PARTS)
-    # result.append(len(method["contract"]))
-    length = []
-    outputs_steps = len(method["contract"])
-    for label, instructions, strings in method["contract"]:
-        length.append(len(instructions))
-    length = max(length)
-    depth = int(np.ceil(np.log2(length)))
-    output_type = os.environ['OUTPUT_TYPE']
-    if output_type == "tree":
-        length = 2 ** depth
-    elif output_type in ("bfs_sequence", "dfs_sequence"):
-        length += 1
-    result.append(outputs_steps)
-    result.append(length)
-    return result
-
-
-def chunks(iterable: Iterable[Any], block_size: int):
-    result = []
-    for element in iterable:
-        result.append(element)
-        if len(result) == block_size:
-            yield result
-            result = []
-    if len(result) > 0:
-        yield result
-
-
 def batching(methods: Iterable[dict]):
-    methods = ((vectorize(method), method) for method in methods)
-    methods = sorted(methods, key=lambda x: np.linalg.norm(x[0]))
-    methods = (method for vector, method in methods)
+    def chunks(iterable: Iterable[Any], block_size: int):
+        result = []
+        for element in iterable:
+            result.append(element)
+            if len(result) == block_size:
+                yield result
+                result = []
+        if len(result) > 0:
+            yield result
+
+    methods = list(methods)
+    random.shuffle(methods)
     return (chunk for chunk in chunks(methods, BATCH_SIZE) if len(chunk) == BATCH_SIZE)
 
 
 def filter_contract_text(method):
+    class StringFiltrator(AstVisitor):
+        def __init__(self, method):
+            super().__init__()
+            self._tree = None
+            self._params = [param["name"] for param in method["description"]["parameters"]]
+
+        def visit(self, ast: Ast):
+            self._tree = ast
+
+        def result(self):
+            return self._tree
+
+        def visit_string(self, node: StringNode):
+            string = " ".join(node.words)
+            string = filters.apply_filters(string, self._params)
+            node.words = string.split(" ")
+
     filtrator = AstDfsGuide(StringFiltrator(method))
     output_type = os.environ['OUTPUT_TYPE']
     if output_type in ("tree", "bfs_sequence"):
@@ -221,11 +218,6 @@ def parse_contract(method):
     forest = Parser.parse("\n".join(method["contract"]))
     compiler = AstDfsGuide(AstCompiler())
     method["contract"] = [compiler.accept(tree) for tree in forest]
-    for label, instructions, strings in method["contract"]:
-        for instruction in instructions:
-            token = instruction.token
-            statistic.count(token)
-        statistic.count(label)
     return method
 
 
@@ -319,6 +311,67 @@ def build_batch(methods: List[dict]):
     outputs = (labels, tokens, strings, strings_mask)
     parameters = (num_conditions, sequence_length, string_length, tree_depth)
     return inputs, outputs, parameters
+
+
+# fixme: dirt
+def align_data_set(methods: Iterable[dict]):
+    # methods = tuple(methods)
+    # stats = []
+    # for method in methods:
+    #     token_counters = {}
+    #     for label, instructions, strings in method["contract"]:
+    #         for instruction in instructions:
+    #             name = instruction.token.name
+    #             token_counters[name] = token_counters.get(name, 0) + 1
+    #     stats.append(token_counters)
+    # token_counters = {}
+    # for stat in stats:
+    #     for name, number in stat.items():
+    #         token_counters[name] = token_counters.get(name, 0) + number
+    # max_value = max(token_counters.values())
+    # overhead = 10
+    # imbalance = 0.1
+    # part = 0.4
+    # lack = {name: part * max_value - number for name, number in token_counters.items() if number < part * max_value}
+    # stats = [[i, stat, 0] for i, stat in enumerate(stats) if any(name in lack for name in stat)]
+    # stop = False
+    # while not stop:
+    #     new_max_value = max(token_counters.values())
+    #     if max_value + overhead < new_max_value:
+    #         break
+    #     min_value = min(number for index, stat, number in stats)
+    #     stop = True
+    #     for i in range(len(stats)):
+    #         index, stat, number = stats[i]
+    #         if number * imbalance <
+    #     stats = [[index, stat, number] for index, stat, number in stats if any(lack.get(name, 0) > 0 for name in stat)]
+    return methods
+
+
+@trace
+def prepare_data_set():
+    statistic = Statistic()
+    methods = dumpers.json_load(JODA_TIME_DATA_SET)
+    print("raw methods", len(methods))
+    methods = (filters.apply(method) for method in methods)
+    methods = (join_java_doc(method) for method in methods if not empty(method))
+    methods = (index_java_doc(method) for method in methods)
+    methods = (parse_contract(method) for method in methods)
+    methods = (method for method in methods if len(method["contract"]) > 0)
+    methods = (statistic.before.consider(method) for method in methods)
+    methods = (filter_contract(method) for method in methods)
+    methods = (method for method in methods if len(method["contract"]) > 0)
+    methods = (standardify_contract(method) for method in methods)
+    methods = (method for method in methods if len(method["contract"]) > 0)
+    methods = align_data_set(methods)
+    methods = (statistic.after.consider(method) for method in methods)
+    methods = (filter_contract_text(method) for method in methods)
+    methods = (index_contract(method) for method in methods)
+    batches = [build_batch(raw_batch) for raw_batch in batching(methods)]
+    random.shuffle(batches)
+    dumpers.pkl_dump(batches, ANALYSER_METHODS)
+    print("batches", len(batches))
+    statistic.show()
 
 
 if __name__ == '__main__':

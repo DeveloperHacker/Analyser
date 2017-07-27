@@ -6,7 +6,7 @@ from typing import Iterable
 
 import tensorflow as tf
 
-from utils.wrapper import read_only_lazy_property
+from utils.wrappers import read_only_lazy_property
 
 time_format = "%d-%m-%Y-%H-%M-%S"
 time_pattern = "\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}"

@@ -7,8 +7,8 @@ from contracts.tokens.MarkerToken import MarkerToken
 from constants.generator import EMBEDDING_SIZE
 from constants.paths import EMBEDDINGS
 from constants.tags import GO, PAD, NOP
-from utils import Dumper
-from utils.wrapper import read_only_lazy_property, lazy_function
+from utils import dumpers
+from utils.wrappers import read_only_lazy_property, lazy_function
 
 
 # ToDo: thread save
@@ -78,7 +78,7 @@ class Embeddings:
 
 @lazy_function
 def words() -> Embeddings:
-    instance = Dumper.pkl_load(EMBEDDINGS)
+    instance = dumpers.pkl_load(EMBEDDINGS)
     instance[GO] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
     instance[PAD] = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
     instance = list(instance.items())
