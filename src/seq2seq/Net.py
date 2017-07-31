@@ -6,7 +6,7 @@ from typing import Iterable
 
 import tensorflow as tf
 
-from utils.wrappers import read_only_lazy_property
+from utils.wrappers import lazy
 
 time_format = "%d-%m-%Y-%H-%M-%S"
 time_pattern = "\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}"
@@ -19,11 +19,11 @@ class Net(metaclass=ABCMeta):
         def __init__(self):
             super().__init__("NaN hasn't expected")
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def saver(self) -> tf.train.Saver:
         return tf.train.Saver(var_list=self.variables)
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def variables(self) -> Iterable[tf.Variable]:
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
 

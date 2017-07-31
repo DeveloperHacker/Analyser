@@ -1,5 +1,6 @@
-import logging
 import time
+
+from configurations.logger import timing_logger
 
 
 def expand_time(clock: float):
@@ -33,80 +34,99 @@ def static(**kwargs):
     return decorate
 
 
-@static(nested=0)
 def trace(func):
     def wrapper(*args, **kwargs):
-        name = func.__module__.split(".")[-1] + "." + func.__name__
-        shift = "│" * trace.nested
-        start_time = time.time()
-        d, h, m, s, ms = expand_time(start_time)
-        formatted = format_time(0, (h + 3) % 24, m, s, ms)
-        logging.info("{}╒Function \"{}\" is invoked at {} o'clock".format(shift, name, formatted))
-        trace.nested += 1
-        try:
+        with Timer(func.__name__):
             result = func(*args, **kwargs)
-        finally:
-            trace.nested -= 1
-            end_time = time.time()
-            delay = end_time - start_time
-            expanded = expand_time(delay)
-            formatted = format_time(*expanded)
-            logging.info("{}╘Function \"{}\" worked for {}".format(shift, name, formatted))
         return result
 
     return wrapper
 
 
-def read_only_lazy_property(func):
-    attr_name = "_lazy_" + func.__name__
+class Timer:
+    def __init__(self, name: str):
+        self.begin = 0
+        self.end = 0
+        self.name = name
 
-    @property
-    def _property(self):
-        if not hasattr(self, attr_name):
-            setattr(self, attr_name, func(self))
-        return getattr(self, attr_name)
+    def start(self):
+        self.begin = time.time()
 
-    @_property.setter
-    def _property(self, value):
-        raise AttributeError
+    def stop(self):
+        self.end = time.time()
 
-    return _property
+    def delay(self):
+        return self.end - self.begin
 
+    @staticmethod
+    def log(text):
+        timing_logger.info(text)
 
-def lazy_property(func):
-    attr_name = "_lazy_" + func.__name__
+    def __enter__(self):
+        self.start()
+        self.log("process '%s' is started" % self.name)
+        return self
 
-    @property
-    def _property(self):
-        if not hasattr(self, attr_name):
-            setattr(self, attr_name, func(self))
-        return getattr(self, attr_name)
-
-    @_property.setter
-    def _property(self, value):
-        setattr(self, attr_name, value)
-
-    return _property
-
-
-def lazy_method(func):
-    attr_name = "_lazy_" + func.__name__
-
-    def _method(self, *args, **kwargs):
-        if not hasattr(self, attr_name):
-            setattr(self, attr_name, func(self, *args, **kwargs))
-        return getattr(self, attr_name)
-
-    return _method
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        expanded = expand_time(self.delay())
+        formatted = format_time(*expanded)
+        formatter = "process '{}' worked for '{}'"
+        self.log(formatter.format(self.name, formatted))
 
 
-def lazy_function(func):
-    instance = None
+class lazy:
+    @staticmethod
+    def read_only_property(func):
+        attr_name = "_lazy_" + func.__name__
 
-    def _function(*args, **kwargs):
-        nonlocal instance
-        if instance is None:
-            instance = func(*args, **kwargs)
-        return instance
+        @property
+        def _property(self):
+            if not hasattr(self, attr_name):
+                setattr(self, attr_name, func(self))
+            return getattr(self, attr_name)
 
-    return _function
+        @_property.setter
+        def _property(self, value):
+            raise AttributeError
+
+        return _property
+
+    @staticmethod
+    def property(func):
+        attr_name = "_lazy_" + func.__name__
+
+        @property
+        def _property(self):
+            if not hasattr(self, attr_name):
+                setattr(self, attr_name, func(self))
+            return getattr(self, attr_name)
+
+        @_property.setter
+        def _property(self, value):
+            setattr(self, attr_name, value)
+
+        return _property
+
+    @staticmethod
+    def method(func):
+        attr_name = "_lazy_" + func.__name__
+
+        def _method(self, *args, **kwargs):
+            if not hasattr(self, attr_name):
+                setattr(self, attr_name, func(self, *args, **kwargs))
+            return getattr(self, attr_name)
+
+        return _method
+
+    @staticmethod
+    def function(func):
+        instance = None
+
+        def _function(*args, **kwargs):
+            nonlocal instance
+            if instance is None:
+                instance = func(*args, **kwargs)
+            return instance
+
+        return _function

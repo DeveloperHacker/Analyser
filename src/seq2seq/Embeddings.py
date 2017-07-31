@@ -4,11 +4,11 @@ import numpy as np
 from contracts.tokens import tokens as _tokens
 from contracts.tokens.MarkerToken import MarkerToken
 
-from constants.generator import EMBEDDING_SIZE
-from constants.paths import EMBEDDINGS
-from constants.tags import GO, PAD, NOP
+from configurations.constants import EMBEDDING_SIZE
+from configurations.paths import EMBEDDINGS
+from configurations.tags import GO, PAD, NOP
 from utils import dumpers
-from utils.wrappers import read_only_lazy_property, lazy_function
+from utils.wrappers import lazy
 
 
 # ToDo: thread save
@@ -21,23 +21,23 @@ class Embeddings:
     def instance(self) -> List[Tuple[str, np.array]]:
         return self._instance
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def name2emb(self) -> Dict[str, np.array]:
         return {name: embedding for name, embedding in self._instance}
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def idx2name(self) -> List[str]:
         return [name for name, embedding in self.instance]
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def idx2emb(self) -> List[np.ndarray]:
         return [embedding for name, embedding in self.instance]
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def emb2idx(self) -> Dict[Tuple[np.dtype], int]:
         return {tuple(embedding): index for index, (name, embedding) in enumerate(self.instance)}
 
-    @read_only_lazy_property
+    @lazy.read_only_property
     def name2idx(self) -> dict:
         return {word: i for i, (word, embedding) in enumerate(self.instance)}
 
@@ -76,7 +76,7 @@ class Embeddings:
         return len(self.instance)
 
 
-@lazy_function
+@lazy.function
 def words() -> Embeddings:
     instance = dumpers.pkl_load(EMBEDDINGS)
     instance[GO] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
@@ -86,7 +86,7 @@ def words() -> Embeddings:
     return Embeddings(instance, "UNK")
 
 
-@lazy_function
+@lazy.function
 def tokens() -> Embeddings:
     _tokens.register(MarkerToken(NOP))
     names = list(_tokens.predicates()) + list(_tokens.markers())
@@ -95,7 +95,7 @@ def tokens() -> Embeddings:
     return Embeddings(instance)
 
 
-@lazy_function
+@lazy.function
 def labels() -> Embeddings:
     names = list(_tokens.labels())
     embeddings = list(np.eye(len(names)))

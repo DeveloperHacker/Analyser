@@ -172,16 +172,16 @@ def bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs, sequence_length=None,
                 parallel_iterations=parallel_iterations, swap_memory=swap_memory,
                 time_major=time_major, scope=bw_scope)
 
-    output_bw = _reverse(
-        output_bw, seq_lengths=sequence_length,
-        seq_dim=time_dim, batch_dim=batch_dim)
+        output_bw = _reverse(
+            output_bw, seq_lengths=sequence_length,
+            seq_dim=time_dim, batch_dim=batch_dim)
 
-    output_states_bw = _reverse(
-        output_states_bw, seq_lengths=sequence_length,
-        seq_dim=time_dim, batch_dim=batch_dim)
+        output_states_bw = _reverse(
+            output_states_bw, seq_lengths=sequence_length,
+            seq_dim=time_dim, batch_dim=batch_dim)
 
-    outputs = (output_fw, output_bw)
-    output_states = (output_states_fw, output_states_bw)
+        outputs = (output_fw, output_bw)
+        output_states = (output_states_fw, output_states_bw)
 
     return outputs, output_states
 
@@ -699,7 +699,7 @@ def attention_dynamic_rnn(
                         y = array_ops.reshape(y, [batch_size, 1, 1, attn_size])
                         # Attention mask is a softmax of v' * tanh(...).
                         s = math_ops.reduce_sum(vector * math_ops.tanh(hidden_features + y), [2, 3])
-                        attention_weights = array_ops.reshape(nn_ops.softmax(s), [batch_size, attn_length, 1, 1])
+                        attention_weights = array_ops.reshape(math_ops.sigmoid(s), [batch_size, attn_length, 1, 1])
                         # Now calculate the attention-weighted vector.
                         attention = math_ops.reduce_sum(attention_weights * hidden, [1, 2])
                         attentions_weights.append(array_ops.reshape(attention_weights, [batch_size, attn_length]))

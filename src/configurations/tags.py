@@ -2,11 +2,10 @@ NORMAL_CONCENTRATION_OF_WORDS = 0.7
 
 STRING = "@string"
 NUMBER = "@number"
-TRUE = "@true"
-FALSE = "@false"
-NULL = "@null"
 
-HTML = "@html"
+HTML_BEGIN = "@html_begin"
+HTML_END = "@html_end"
+HTML_BLOCK = "@html_block"
 REFERENCE = "@reference"
 LINK = "@link"
 PATH = "@path"
@@ -31,7 +30,9 @@ PARTS = (HEAD, PARAMETER, RETURN, VARIABLE, THROW, SEE)
 
 TAGS = PARTS + (
     STRING,
-    HTML,
+    HTML_BEGIN,
+    HTML_END,
+    HTML_BLOCK,
     REFERENCE,
     LINK,
     PATH,

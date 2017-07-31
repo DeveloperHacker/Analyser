@@ -4,27 +4,36 @@ from typing import Iterable, Any, List
 import numpy as np
 import tensorflow as tf
 
-from constants import embeddings
-from constants.tags import NOP, PARTS
+from configurations.tags import NOP
+from seq2seq import Embeddings
+from utils.wrappers import static
 
 
-def greedy_correct(targets, outputs):
-    labels_targets, tokens_targets, strings_targets, strings_mask = targets
-    labels, tokens, strings = outputs
-    tokens_targets_values = np.asarray(embeddings.tokens().idx2emb)[tokens_targets]
-    result_labels = []
+def cross_entropy_loss(targets, logits):
+    with tf.variable_scope("cross_entropy_loss"):
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+        loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
+    return loss
+
+
+def l2_loss(variables):
+    with tf.variable_scope("l2_loss"):
+        loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
+    return loss
+
+
+def greedy_correct(targets, outputs, dependencies):
+    num_dependencies = len(dependencies)
+    batch_size = outputs.shape[0]
+    contract_size = outputs.shape[1]
+    tokens_targets_values = np.asarray(Embeddings.tokens().idx2emb)[targets]
     result_tokens = []
-    result_strings = []
-    result_strings_mask = []
-    batch_size = tokens.shape[0]
-    contract_size = tokens.shape[1]
+    result_dependencies = [[] for _ in range(num_dependencies)]
     for i in range(batch_size):
         from_indexes = list(range(contract_size))
         to_indexes = list(range(contract_size))
-        result_label = [None] * contract_size
         result_token = [None] * contract_size
-        result_string = [None] * contract_size
-        result_string_mask = [None] * contract_size
+        _result_dependencies = [[None] * contract_size for _ in range(num_dependencies)]
         while len(from_indexes) > 0:
             index_best_from_index = None
             index_best_to_index = None
@@ -32,7 +41,7 @@ def greedy_correct(targets, outputs):
             for j, from_index in enumerate(from_indexes):
                 for k, to_index in enumerate(to_indexes):
                     from_output = tokens_targets_values[i][from_index]
-                    to_output = tokens[i][to_index]
+                    to_output = outputs[i][to_index]
                     distance = np.linalg.norm(from_output - to_output)
                     # distance = np.sum(from_output * to_output)
                     if best_distance is None or distance < best_distance:
@@ -43,26 +52,21 @@ def greedy_correct(targets, outputs):
             best_to_index = to_indexes[index_best_to_index]
             del from_indexes[index_best_from_index]
             del to_indexes[index_best_to_index]
-            result_label[best_to_index] = labels_targets[i][best_from_index]
-            result_token[best_to_index] = tokens_targets[i][best_from_index]
-            result_string[best_to_index] = strings_targets[i][best_from_index]
-            result_string_mask[best_to_index] = strings_mask[i][best_from_index]
-        result_labels.append(result_label)
+            result_token[best_to_index] = targets[i][best_from_index]
+            for j in range(num_dependencies):
+                _result_dependencies[j][best_to_index] = dependencies[j][i][best_from_index]
         result_tokens.append(result_token)
-        result_strings.append(result_string)
-        result_strings_mask.append(result_string_mask)
-    result_labels = np.asarray(result_labels)
+        for j in range(num_dependencies):
+            result_dependencies[j].append(_result_dependencies[j])
     result_tokens = np.asarray(result_tokens)
-    result_strings = np.asarray(result_strings)
-    result_strings_mask = np.asarray(result_strings_mask)
-    return result_labels, result_tokens, result_strings, result_strings_mask
+    result_dependencies = [np.asarray(result_dependencies[i]) for i in range(num_dependencies)]
+    return result_tokens, result_dependencies
 
 
 def nearest_correct(targets, outputs, fine_weigh):
-    labels_targets, tokens_targets, strings_targets, strings_mask = targets
-    labels, tokens, strings = outputs
-    tokens_targets_values = np.asarray(embeddings.tokens().idx2emb)[tokens_targets]
-    result_labels = []
+    tokens_targets, strings_targets, strings_mask = targets
+    tokens, strings = outputs
+    tokens_targets_values = np.asarray(Embeddings.tokens().idx2emb)[tokens_targets]
     result_tokens = []
     result_strings = []
     result_strings_mask = []
@@ -80,58 +84,58 @@ def nearest_correct(targets, outputs, fine_weigh):
             if best_distance is None or distance < best_distance:
                 best_indices = list_indexes
                 best_distance = distance
-        result_labels.append(labels_targets[i][best_indices])
         result_tokens.append(tokens_targets[i][best_indices])
         result_strings.append(strings_targets[i][best_indices])
         result_strings_mask.append(strings_mask[i][best_indices])
-    result_labels = np.asarray(result_labels)
     result_tokens = np.asarray(result_tokens)
     result_strings = np.asarray(result_strings)
     result_strings_mask = np.asarray(result_strings_mask)
-    return result_labels, result_tokens, result_strings, result_strings_mask
+    return result_tokens, result_strings, result_strings_mask
 
 
-def calc_accuracy(outputs_targets, outputs, labels_targets=None, labels=None):
-    assert labels is None if labels_targets is None else labels is not None
-    true_positive, true_negative, false_negative, false_positive = [], [], [], []
-    batch_size = outputs.shape[0]
-    contract_size = outputs.shape[1]
-    nop = embeddings.tokens().get_index(NOP)
+def calc_accuracy(targets, outputs):
+    length = outputs.shape[0]
+    nop = Embeddings.tokens().get_index(NOP)
     is_nop = lambda condition: all(token == nop for token in condition)
-    for i in range(batch_size):
-        output_nops = [j for j in range(contract_size) if is_nop(outputs[i][j])]
-        target_nops = [j for j in range(contract_size) if is_nop(outputs_targets[i][j])]
-        output_indexes = [j for j in range(contract_size) if j not in output_nops]
-        target_indexes = [j for j in range(contract_size) if j not in target_nops]
-        _true_accept = 0
-        _false_accept = 0
-        for j in output_indexes:
-            output_condition = outputs[i][j]
-            if labels is not None:
-                label = labels[i][j]
-            index = None
-            for k in range(len(target_indexes)):
-                output_target_condition = outputs_targets[i][target_indexes[k]]
-                if labels_targets is not None:
-                    label_target = labels_targets[i][j]
-                if all(token in output_target_condition for token in output_condition):
-                    cond = labels_targets is not None
-                    if cond and label == label_target or not cond:
-                        index = k
-                        break
-            if index is None:
-                _false_accept += 1
-            else:
-                del target_indexes[index]
-                _true_accept += 1
-        true_positive.append(_true_accept)
-        true_negative.append(min(len(output_nops), len(target_nops)))
-        false_negative.append(len(target_indexes))
-        false_positive.append(_false_accept)
-    return true_positive, true_negative, false_negative, false_positive
+    output_nops = [j for j in range(length) if is_nop(outputs[j])]
+    target_nops = [j for j in range(length) if is_nop(targets[j])]
+    output_indexes = [j for j in range(length) if j not in output_nops]
+    target_indexes = [j for j in range(length) if j not in target_nops]
+    true_negative = min(len(output_nops), len(target_nops))
+    true_positive = 0
+    false_positive = 0
+    for j in output_indexes:
+        output_condition = outputs[j]
+        index = None
+        for k in range(len(target_indexes)):
+            output_target = targets[target_indexes[k]]
+            if all(token in output_target for token in output_condition):
+                index = k
+                break
+        if index is None:
+            false_positive += 1
+        else:
+            del target_indexes[index]
+            true_positive += 1
+    false_negative = len(target_indexes)
+    error = true_positive + false_negative + false_positive
+    accuracy = true_positive / error
+    error += true_negative
+    true_positive /= error
+    true_negative /= error
+    false_negative /= error
+    false_positive /= error
+    return accuracy, (true_positive, true_negative, false_negative, false_positive)
 
 
-def transpose_mask(attention_mask, num_heads):
+def batch_accuracy(targets, outputs):
+    results = (calc_accuracy(target, output) for target, output in zip(targets, outputs))
+    results = zip(*((result[0], *result[1]) for result in results))
+    accuracy, true_positive, true_negative, false_negative, false_positive = results
+    return accuracy, (true_positive, true_negative, false_negative, false_positive)
+
+
+def transpose_attention(attentions, num_heads=1):
     """
         `[a x b x c]` is tensor with shape a x b x c
 
@@ -140,8 +144,7 @@ def transpose_mask(attention_mask, num_heads):
 
         Input:
         attention[i] is `[root_time_steps x bach_size x attn_length[i]]`
-        attentions is [attention[i] for i in range(num_attentions) for j in range(num_heads)]
-        attention_mask is [attentions for i in range(num_decoders)]
+        attention_mask is [attention[i] for i in range(num_attentions) for j in range(num_heads)]
 
         Output:
         attention is [`[attn_length[i]]` for i in range(num_attentions)]
@@ -160,25 +163,13 @@ def transpose_mask(attention_mask, num_heads):
             yield result
 
     # Merge multi-heading artifacts
-    def merge1(pack):
+    def merge(pack):
         return pack[0]
 
-    # Merge stacked-decoding artifacts
-    def merge2(pack):
-        return pack[0]
-
-    merged_attention_mask = []
-    for attentions in attention_mask:
-        merged_attentions = []
-        for attention in chunks(attentions, num_heads):
-            attention = merge1(np.asarray(attention).transpose([0, 2, 1, 3]))
-            merged_attentions.append(attention.tolist())
-        merged_attention_mask.append(merged_attentions)
-    merged_attention_mask = np.asarray(merged_attention_mask)
-    shape_length = len(merged_attention_mask.shape)
-    merged_attention_mask = merged_attention_mask.transpose([0, 2, 3, 1, *range(4, shape_length)])
-    merged_attention_mask = merge2(merged_attention_mask)
-    return merged_attention_mask
+    attentions = [merge(attention) for attention in chunks(attentions, num_heads)]
+    attentions = np.asarray(attentions)
+    attentions = attentions.transpose([2, 1, 0, *range(3, len(attentions.shape))])
+    return attentions
 
 
 def print_doc(formatter, indexed_doc, words_weighs):
@@ -224,10 +215,10 @@ def print_doc(formatter, indexed_doc, words_weighs):
             values[j] = (i + 1) / k
         return values
 
+    @static(pattern=re.compile("(\33\[\d+m)"))
     def cut(string: str, text_size: int):
         def length(word: str):
-            pattern = re.compile("(\33\[\d+m)")
-            found = re.findall(pattern, word)
+            found = re.findall(cut.pattern, word)
             length = 0 if found is None else len("".join(found))
             return len(word) - length
 
@@ -250,31 +241,18 @@ def print_doc(formatter, indexed_doc, words_weighs):
 
     text_size = formatter.row_size(-1) - 1
     formatter.print("", " " + next(cut(legend(), text_size)))
-    for i, label in enumerate(PARTS):
-        maximum = np.max(words_weighs[i])
-        minimum = np.min(words_weighs[i])
-        mean = np.mean(words_weighs[i])
-        variance = np.var(words_weighs[i])
+    for word_weight in words_weighs:
+        maximum = np.max(word_weight)
+        minimum = np.min(word_weight)
+        mean = np.mean(word_weight)
+        variance = np.var(word_weight)
         text = "m[W] = {:.4f}, d[W] = {:.4f}, min(W) = {:.4f}, max(W) = {:.4f}"
         text = text.format(mean, variance, minimum, maximum)
         formatter.print("", "")
         formatter.print("", " " + next(cut(text, text_size)))
-        words = (embeddings.words().get_name(i) for i in indexed_doc[i])
-        weighs = top_k_normalization(6, words_weighs[i])
+        words = (Embeddings.words().get_name(index) for index in indexed_doc)
+        weighs = top_k_normalization(6, word_weight)
         # weighs = normalization(words_weighs[i])
         words = colorize_words(words, weighs)
         for line in cut(" ".join(words), text_size):
-            formatter.print(label, " " + line)
-
-
-def cross_entropy_loss(targets, logits):
-    with tf.variable_scope("cross_entropy_loss"):
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
-    return loss
-
-
-def l2_loss(variables):
-    with tf.variable_scope("l2_loss"):
-        loss = tf.reduce_sum([tf.nn.l2_loss(variable) for variable in variables])
-    return loss
+            formatter.print("", " " + line)

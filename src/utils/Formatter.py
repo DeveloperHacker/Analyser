@@ -1,6 +1,7 @@
 import logging
-
 from typing import Iterable
+
+from configurations.logger import TABLE_LOGGER
 
 
 class Formatter:
@@ -44,36 +45,38 @@ class Formatter:
         self._head = self._head.format(segments=self._heads)
 
     @staticmethod
-    def _print(text: str):
-        logging.info(text)
+    def raw_print(text: str):
+        logging.getLogger(TABLE_LOGGER).info(text)
 
     def print(self, *args):
         if self._height and self._row % self._height == 0:
-            self.print_head()
-        self._print(self._line.format(segments=list(args)))
+            if self._row > 0:
+                self.print_delimiter()
+            else:
+                self.print_upper_delimiter()
+            self.print_head_text()
+            self.print_delimiter()
+        self.raw_print(self._line.format(segments=list(args)))
         self._row += 1
 
     def print_head(self):
-        if self._row:
-            self.print_delimiter()
-        else:
-            self.print_upper_delimiter()
+        self.print_upper_delimiter()
         self.print_head_text()
         self.print_delimiter()
 
     def print_delimiter(self):
-        self._print(self._delimiter)
+        self.raw_print(self._delimiter)
 
     def print_upper_delimiter(self):
-        self._print(self._upper_delimiter)
+        self.raw_print(self._upper_delimiter)
         self._row = 0
 
     def print_lower_delimiter(self):
-        self._print(self._lower_delimiter)
+        self.raw_print(self._lower_delimiter)
         self._row = 0
 
     def print_head_text(self):
-        self._print(self._head)
+        self.raw_print(self._head)
 
     @property
     def height(self):

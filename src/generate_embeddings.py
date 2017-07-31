@@ -2,11 +2,11 @@ from multiprocessing.pool import Pool
 
 import tensorflow as tf
 
-from config import init
-from constants.generator import WORD2VEC_EPOCHS, WINDOW, EMBEDDING_SIZE
-from constants.paths import *
-from utils import dumpers, filters, generators
-from utils.wrappers import trace
+from configurations.constants import TRAIN_EPOCHS, WINDOW_SIZE, EMBEDDING_SIZE
+from configurations.paths import *
+from configurations.tags import VARIABLE
+from utils import dumpers, anonymizers, generators
+from utils.wrappers import Timer
 from word2vec import word2vec_optimized as word2vec
 
 
@@ -18,7 +18,8 @@ def empty(method):
 
 
 def join_java_doc(method):
-    java_doc = {}
+    params = (param["name"] for param in method["description"]["parameters"])
+    java_doc = {VARIABLE: " ".join(["%s%d %s" % (VARIABLE, i, name) for i, name in enumerate(params)])}
     for label, text in method["java-doc"].items():
         java_doc[label] = " ".join(text)
     method["java-doc"] = java_doc
@@ -34,14 +35,13 @@ def extract_docs(method):
 def apply(method):
     if empty(method):
         return None
-    method = filters.apply(method)
     method = join_java_doc(method)
+    method = anonymizers.apply(method)
     doc = extract_docs(method)
     return doc
 
 
-@trace
-def prepare():
+def prepare_data_set():
     methods = dumpers.json_load(FULL_DATA_SET)
     with Pool() as pool:
         docs = pool.map(apply, methods)
@@ -50,16 +50,17 @@ def prepare():
         file.write("\n".join(docs))
 
 
-@trace
-def generate():
+def train():
     word2vec.FLAGS.save_path = GENERATOR
     word2vec.FLAGS.train_data = FILTERED
-    word2vec.FLAGS.epochs_to_train = WORD2VEC_EPOCHS
+    word2vec.FLAGS.epochs_to_train = TRAIN_EPOCHS
     word2vec.FLAGS.embedding_size = EMBEDDING_SIZE
-    word2vec.FLAGS.window_size = WINDOW
+    word2vec.FLAGS.window_size = WINDOW_SIZE
     options = word2vec.Options()
 
-    with tf.Graph().as_default(), tf.Session() as session, tf.device("/cpu:0"):
+    config = tf.ConfigProto()
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    with tf.Graph().as_default(), tf.Session(config=config) as session, tf.device("/cpu:0"):
         model = word2vec.Word2Vec(options, session)
         for _ in range(options.epochs_to_train):
             model.train()
@@ -69,7 +70,6 @@ def generate():
     dumpers.pkl_dump(embeddings, EMBEDDINGS)
 
 
-@trace
 def cluster():
     embeddings = dumpers.pkl_load(EMBEDDINGS)
     clusters = generators.classifiers.kneighbors(embeddings, 0.1)
@@ -77,7 +77,9 @@ def cluster():
 
 
 if __name__ == '__main__':
-    init()
-    prepare()
-    generate()
-    cluster()
+    with Timer("PREPARE"):
+        prepare_data_set()
+    with Timer("TRAIN"):
+        train()
+    with Timer("TEST"):
+        cluster()

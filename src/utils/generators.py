@@ -4,7 +4,7 @@ from multiprocessing.pool import Pool
 import numpy as np
 from sklearn.cluster import KMeans as _KMeans
 
-from utils.wrappers import trace
+from configurations.logger import info_logger
 
 
 def maximum(_, tar_value, data):
@@ -26,7 +26,6 @@ def separate(tar_label, tar_value, data, divider, threshold) -> StateParam:
 
 class classifiers:
     @staticmethod
-    @trace
     def kneighbors(data: dict, threshold: float):
         with Pool()as pool:
             state = [(label, target, data) for label, target in data.items()]
@@ -35,7 +34,6 @@ class classifiers:
         return state
 
     @staticmethod
-    @trace
     def kmeans(data: list, numClusters: int):
         X = np.asarray([vector for _, vector in data])
         kmeans = _KMeans(n_clusters=numClusters, random_state=0, n_jobs=-1).fit(X)
@@ -47,21 +45,19 @@ class classifiers:
 
 class show:
     @staticmethod
-    @trace
     def kmeans(clusters: list, num_clusters=None):
         if num_clusters is None:
             num_clusters = len(clusters)
         clusters = list(reversed(sorted(clusters, key=lambda cluster: len(cluster))))
         for i in range(0, round(num_clusters)):
-            print(clusters[i])
+            info_logger.info(clusters[i])
 
     @staticmethod
-    @trace
     def kneighbors(clusters: list, num_clusters=None):
         if num_clusters is None:
             num_clusters = len(clusters)
         clusters.sort(key=lambda target: len(target.data), reverse=True)
         for i in range(0, round(num_clusters)):
-            print("\"%s\":" % clusters[i].label)
+            info_logger.info("\"%s\":" % clusters[i].label)
             for label, distance in clusters[i].data.items():
-                print("\t%.3f: \"%s\"" % (distance, label))
+                info_logger.info("\t%.3f: \"%s\"" % (distance, label))

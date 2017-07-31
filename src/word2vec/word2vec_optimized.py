@@ -38,6 +38,8 @@ import time
 
 import tensorflow as tf
 
+from configurations.logger import table_logger
+
 word2vec = tf.load_op_library(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'word2vec_ops.so'))
 
 flags = tf.app.flags
@@ -157,15 +159,15 @@ class Word2Vec(object):
         (opts.vocab_words, opts.vocab_counts,
          opts.words_per_epoch) = self._session.run([words, counts, words_per_epoch])
         opts.vocab_size = len(opts.vocab_words)
-        print("Data file: ", opts.train_data)
-        print("Vocab size: ", opts.vocab_size - 1, " + UNK")
-        print("Words per epoch: ", opts.words_per_epoch)
+        table_logger.info("Data file: {}".format(opts.train_data))
+        table_logger.info("Vocab size: {} + UNK".format(opts.vocab_size - 1))
+        table_logger.info("Words per epoch: {}".format(opts.words_per_epoch))
 
         self.id2word = opts.vocab_words
         for i, w in enumerate(self.id2word):
             self.word2id[w] = i
 
-        # Declare all constants we need.
+        # Declare all configurations we need.
         # Input words word2vec: [vocab_size, emb_dim]
         w_in = tf.Variable(
             tf.random_uniform(
@@ -244,7 +246,7 @@ class Word2Vec(object):
             now = time.time()
             last_words, last_time, rate = words, now, (words - last_words) / (
                 now - last_time)
-            print("Epoch %4d Step %8d: lr = %5.3f words/sec = %8.0f\r" % (epoch, step, lr, rate))
+            table_logger.info("Epoch %4d Step %8d: lr = %5.3f words/sec = %8.0f" % (epoch, step, lr, rate))
             sys.stdout.flush()
             if epoch != initial_epoch:
                 break
