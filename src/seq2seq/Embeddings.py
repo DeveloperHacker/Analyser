@@ -1,7 +1,7 @@
 from typing import List, Dict, Tuple
 
 import numpy as np
-from contracts.tokens import tokens as _tokens
+from contracts.tokens import Tokens, Labels, Predicates, Markers
 from contracts.tokens.MarkerToken import MarkerToken
 
 from configurations.constants import EMBEDDING_SIZE
@@ -47,20 +47,20 @@ class Embeddings:
         if isinstance(key, (int, np.number)):
             index = int(key)
             if index < 0 or index >= len(self.instance):
-                raise Exception("Store with index {} is not found".format(key))
+                raise Exception("Store with index '{}' is not found".format(key))
         elif isinstance(key, str):
             if key in self.name2idx:
                 index = self.name2idx[key]
             elif self.default_name is not None:
                 index = self.name2idx[self.default_name]
             else:
-                raise Exception("Store with name {} is not found".format(key))
+                raise Exception("Store with name '{}' is not found".format(key))
         else:
             key = tuple(key)
             if key in self.emb2idx:
                 index = self.emb2idx[key]
             else:
-                raise Exception("Store with embedding {} is not found".format(key))
+                raise Exception("Store with embedding '{}' is not found".format(key))
         return index, self.idx2name[index], self.idx2emb[index]
 
     def get_index(self, key) -> int:
@@ -79,8 +79,8 @@ class Embeddings:
 @lazy.function
 def words() -> Embeddings:
     instance = dumpers.pkl_load(EMBEDDINGS)
-    instance[GO] = np.ones([EMBEDDING_SIZE], dtype=np.float32)
-    instance[PAD] = np.zeros([EMBEDDING_SIZE], dtype=np.float32)
+    instance[GO] = np.ones([EMBEDDING_SIZE], np.float32)
+    instance[PAD] = np.zeros([EMBEDDING_SIZE], np.float32)
     instance = list(instance.items())
     instance.sort(key=lambda x: x[0])
     return Embeddings(instance, "UNK")
@@ -88,8 +88,8 @@ def words() -> Embeddings:
 
 @lazy.function
 def tokens() -> Embeddings:
-    _tokens.register(MarkerToken(NOP))
-    names = list(_tokens.predicates()) + list(_tokens.markers())
+    Tokens.register(MarkerToken(NOP))
+    names = list(Predicates.names) + list(Markers.names)
     embeddings = list(np.eye(len(names)))
     instance = list(zip(names, embeddings))
     return Embeddings(instance)
@@ -97,7 +97,7 @@ def tokens() -> Embeddings:
 
 @lazy.function
 def labels() -> Embeddings:
-    names = list(_tokens.labels())
+    names = list(Labels.names)
     embeddings = list(np.eye(len(names)))
     instance = list(zip(names, embeddings))
     return Embeddings(instance)

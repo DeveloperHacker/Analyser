@@ -45,8 +45,12 @@ class Formatter:
         self._head = self._head.format(segments=self._heads)
 
     @staticmethod
-    def raw_print(text: str):
+    def _raw_print(text: str):
         logging.getLogger(TABLE_LOGGER).info(text)
+
+    @staticmethod
+    def raw_print(text: str):
+        Formatter._raw_print(Formatter.BVD + " " + text)
 
     def print(self, *args):
         if self._height and self._row % self._height == 0:
@@ -56,7 +60,7 @@ class Formatter:
                 self.print_upper_delimiter()
             self.print_head_text()
             self.print_delimiter()
-        self.raw_print(self._line.format(segments=list(args)))
+        self._raw_print(self._line.format(segments=list(args)))
         self._row += 1
 
     def print_head(self):
@@ -65,18 +69,18 @@ class Formatter:
         self.print_delimiter()
 
     def print_delimiter(self):
-        self.raw_print(self._delimiter)
+        self._raw_print(self._delimiter)
 
     def print_upper_delimiter(self):
-        self.raw_print(self._upper_delimiter)
+        self._raw_print(self._upper_delimiter)
         self._row = 0
 
     def print_lower_delimiter(self):
-        self.raw_print(self._lower_delimiter)
+        self._raw_print(self._lower_delimiter)
         self._row = 0
 
     def print_head_text(self):
-        self.raw_print(self._head)
+        self._raw_print(self._head)
 
     @property
     def height(self):

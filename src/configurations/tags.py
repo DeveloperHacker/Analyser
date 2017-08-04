@@ -1,19 +1,3 @@
-NORMAL_CONCENTRATION_OF_WORDS = 0.7
-
-STRING = "@string"
-NUMBER = "@number"
-
-HTML_BEGIN = "@html_begin"
-HTML_END = "@html_end"
-HTML_BLOCK = "@html_block"
-REFERENCE = "@reference"
-LINK = "@link"
-PATH = "@path"
-URL = "@url"
-INVOCATION = "@invocation"
-DOT_INVOCATION = "@dot_invocation"
-STABLE_REDUCTION = "@stable_reduction"
-
 HEAD = "@head"
 PARAMETER = "@param"
 RETURN = "@return"
@@ -21,29 +5,21 @@ VARIABLE = "@var"
 THROW = "@throw"
 SEE = "@see"
 
-NEXT = "@next"
+PARTS = (HEAD, PARAMETER, RETURN, VARIABLE, THROW, SEE)
+
+STRING = "@string"
+NUMBER = "@number"
+
+HTML_BEGIN = "@html"
+HTML_END = "@html"
+HTML_BLOCK = "@html"
+LINK = "@link"
+PATH = "@path"
+URL = "@url"
+
 GO = "@go"
 PAD = "@pad"
 NOP = "@nop"
+NEXT = "@next"
 
-PARTS = (HEAD, PARAMETER, RETURN, VARIABLE, THROW, SEE)
-
-TAGS = PARTS + (
-    STRING,
-    HTML_BEGIN,
-    HTML_END,
-    HTML_BLOCK,
-    REFERENCE,
-    LINK,
-    PATH,
-    URL,
-    INVOCATION,
-    DOT_INVOCATION,
-    NUMBER,
-    STABLE_REDUCTION,
-
-    NEXT,
-    GO,
-    PAD,
-    NOP
-)
+TAGS = PARTS + (STRING, NUMBER, HTML_BEGIN, HTML_END, HTML_BLOCK, LINK, PATH, URL, GO, PAD, NOP, NEXT)

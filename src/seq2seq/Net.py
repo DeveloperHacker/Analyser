@@ -15,10 +15,6 @@ model_pattern = re.compile("model-(%s)\.ckpt\.meta" % time_pattern)
 
 
 class Net(metaclass=ABCMeta):
-    class NaNException(Exception):
-        def __init__(self):
-            super().__init__("NaN hasn't expected")
-
     @lazy.read_only_property
     def saver(self) -> tf.train.Saver:
         return tf.train.Saver(var_list=self.variables)

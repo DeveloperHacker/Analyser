@@ -2,54 +2,29 @@ from multiprocessing.pool import Pool
 
 import tensorflow as tf
 
+from boot import prepares
 from configurations.constants import TRAIN_EPOCHS, WINDOW_SIZE, EMBEDDING_SIZE
 from configurations.paths import *
-from configurations.tags import VARIABLE
-from utils import dumpers, anonymizers, generators
-from utils.wrappers import Timer
+from utils import dumpers, generators
+from utils.wrappers import trace
 from word2vec import word2vec_optimized as word2vec
 
 
-def empty(method):
-    for label, text in method["java-doc"].items():
-        if len(text) > 0:
-            return False
-    return True
-
-
-def join_java_doc(method):
-    params = (param["name"] for param in method["description"]["parameters"])
-    java_doc = {VARIABLE: " ".join(["%s%d %s" % (VARIABLE, i, name) for i, name in enumerate(params)])}
-    for label, text in method["java-doc"].items():
-        java_doc[label] = " ".join(text)
-    method["java-doc"] = java_doc
-    return method
-
-
-def extract_docs(method):
-    result = (text.strip() for label, text in method["java-doc"].items())
-    result = "\n".join(text for text in result if len(text) > 0)
-    return result
-
-
-def apply(method):
-    if empty(method):
-        return None
-    method = join_java_doc(method)
-    method = anonymizers.apply(method)
-    doc = extract_docs(method)
-    return doc
-
-
+@trace("PREPARE DATA-SET")
 def prepare_data_set():
     methods = dumpers.json_load(FULL_DATA_SET)
     with Pool() as pool:
-        docs = pool.map(apply, methods)
-    docs = [doc for doc in docs if doc is not None]
+        methods = (method for method in methods if not prepares.empty(method))
+        methods = pool.map(prepares.join_java_doc, methods)
+        methods = pool.map(prepares.apply_anonymizers, methods)
+        methods = (method for method in methods if not prepares.empty(method))
+        methods = pool.map(prepares.one_line_doc, methods)
+        docs = (method["java-doc"] for method in methods)
     with open(FILTERED, "w") as file:
         file.write("\n".join(docs))
 
 
+@trace("TRAIN NET")
 def train():
     word2vec.FLAGS.save_path = GENERATOR
     word2vec.FLAGS.train_data = FILTERED
@@ -70,6 +45,7 @@ def train():
     dumpers.pkl_dump(embeddings, EMBEDDINGS)
 
 
+@trace("TEST")
 def cluster():
     embeddings = dumpers.pkl_load(EMBEDDINGS)
     clusters = generators.classifiers.kneighbors(embeddings, 0.1)
@@ -77,9 +53,6 @@ def cluster():
 
 
 if __name__ == '__main__':
-    with Timer("PREPARE"):
-        prepare_data_set()
-    with Timer("TRAIN"):
-        train()
-    with Timer("TEST"):
-        cluster()
+    prepare_data_set()
+    train()
+    cluster()

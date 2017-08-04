@@ -1,16 +1,27 @@
+import enum
 import itertools
-from typing import Iterable, Any, List
+import re
+from typing import Iterable, Any, List, Union
 
 import numpy as np
 import tensorflow as tf
 
-from configurations.tags import NOP
+from configurations.tags import NOP, NEXT
 from seq2seq import Embeddings
 from utils.wrappers import static
 
 
-def cross_entropy_loss(targets, logits):
+def cross_entropy_loss(targets, logits, default: int = None):
     with tf.variable_scope("cross_entropy_loss"):
+        if default is not None:
+            with tf.variable_scope("Masking"):
+                output_size = logits.get_shape()[-1].value
+                default_value = tf.one_hot(default, output_size) * output_size
+                boolean_mask = tf.equal(targets, -1)
+                W = tf.to_int32(boolean_mask)
+                targets = (1 - W) * targets + W * default
+                W = tf.to_float(tf.expand_dims(W, -1))
+                logits = (1 - W) * logits + W * default_value
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
         loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
     return loss
@@ -43,7 +54,6 @@ def greedy_correct(targets, outputs, dependencies):
                     from_output = tokens_targets_values[i][from_index]
                     to_output = outputs[i][to_index]
                     distance = np.linalg.norm(from_output - to_output)
-                    # distance = np.sum(from_output * to_output)
                     if best_distance is None or distance < best_distance:
                         index_best_from_index = j
                         index_best_to_index = k
@@ -104,19 +114,15 @@ def calc_accuracy(targets, outputs):
     true_negative = min(len(output_nops), len(target_nops))
     true_positive = 0
     false_positive = 0
-    for j in output_indexes:
-        output_condition = outputs[j]
-        index = None
-        for k in range(len(target_indexes)):
-            output_target = targets[target_indexes[k]]
-            if all(token in output_target for token in output_condition):
-                index = k
+    for i in output_indexes:
+        false_positive += 1
+        for j in range(len(target_indexes)):
+            output_target = targets[target_indexes[j]]
+            if all(token in output_target for token in outputs[i]):
+                del target_indexes[j]
+                true_positive += 1
+                false_positive -= 1
                 break
-        if index is None:
-            false_positive += 1
-        else:
-            del target_indexes[index]
-            true_positive += 1
     false_negative = len(target_indexes)
     error = true_positive + false_negative + false_positive
     accuracy = true_positive / error
@@ -172,9 +178,122 @@ def transpose_attention(attentions, num_heads=1):
     return attentions
 
 
+class Align(enum.Enum):
+    left = enum.auto()
+    right = enum.auto()
+    center = enum.auto()
+
+
+@static(pattern=re.compile("(\33\[\d+m)"))
+def cut(string: str, text_size: int, align: Align):
+    def length(word: str):
+        found = re.findall(cut.pattern, word)
+        length = 0 if found is None else len("".join(found))
+        return len(word) - length
+
+    def chunks(line: str, max_line_length: int) -> Iterable[str]:
+        words = line.split(" ")
+        result = []
+        result_length = 0
+        for word in words:
+            word_length = length(word)
+            if result_length + word_length + 1 > max_line_length:
+                yield " ".join(result) + " " * (text_size - result_length)
+                result_length = 0
+                result = []
+            result_length += word_length + 1
+            result.append(word)
+        yield " ".join(result) + " " * (text_size - result_length)
+
+    lines = (" " + sub_line for line in string.split("\n") for sub_line in chunks(line, text_size - 1))
+    return lines
+
+
+class Style:
+    _byte = "\33[{}m"
+
+    def __init__(self, *styles: Union['Style', str, int]):
+        self._instance = "%s"
+        for style in styles:
+            if isinstance(style, Style):
+                style = style._instance
+            else:
+                style = Style._byte.format(style) + "%s"
+            self._instance %= style
+
+    def flatten(self) -> str:
+        acc_style = "%s"
+        for style in self._instance:
+            acc_style %= style
+        return style
+
+    def apply(self, string: str) -> str:
+        return self._instance % string + Style._byte.format(0)
+
+    def __mod__(self, other) -> Union[str, 'Style']:
+        if isinstance(other, Style):
+            return Style(self, other)
+        if isinstance(other, str):
+            return self.apply(other)
+        return NotImplemented
+
+
+class Styles:
+    empty = Style(0)
+    bold = Style(1)
+    dim = Style(2)
+    underlined = Style(4)
+    blink = Style(5)
+    reverse = Style(7)
+    hidden = Style(8)
+
+    class background:
+        default = Style(49)
+        black = Style(40)
+        red = Style(41)
+        green = Style(42)
+        yellow = Style(43)
+        blue = Style(44)
+        magenta = Style(45)
+        cyan = Style(46)
+        gray = Style(100)
+        light_gray = Style(47)
+        light_red = Style(101)
+        light_green = Style(102)
+        light_yellow = Style(103)
+        light_blue = Style(104)
+        light_magenta = Style(105)
+        light_cyan = Style(106)
+        white = Style(107)
+
+    class foreground:
+        default = Style(39)
+        black = Style(30)
+        red = Style(31)
+        green = Style(32)
+        yellow = Style(33)
+        blue = Style(34)
+        magenta = Style(35)
+        cyan = Style(36)
+        gray = Style(90)
+        light_gray = Style(37)
+        light_red = Style(91)
+        light_green = Style(92)
+        light_yellow = Style(93)
+        light_blue = Style(94)
+        light_magenta = Style(95)
+        light_cyan = Style(96)
+        white = Style(97)
+
+
 def print_doc(formatter, indexed_doc, words_weighs):
-    import re
-    STYLES = (tuple(), (1, 106), (1, 97, 104), (1, 105), (1, 97, 101), (1, 103), (1, 102))
+    STYLES = (Styles.foreground.gray,
+              Styles.bold % Styles.foreground.cyan,
+              Styles.bold % Styles.foreground.blue,
+              Styles.bold % Styles.foreground.magenta,
+              Styles.bold % Styles.foreground.red,
+              Styles.bold % Styles.foreground.yellow,
+              Styles.bold % Styles.foreground.green)
 
     def legend() -> str:
         size = (formatter.size - 4 - 14) // len(STYLES)
@@ -182,23 +301,10 @@ def print_doc(formatter, indexed_doc, words_weighs):
         arrow_body = "─" * size
         arrow_end = "─" * (size - 2) + "> "
         arrow = []
-        for i, styles in enumerate(STYLES):
+        for i, style in enumerate(STYLES):
             text = arrow_begin if i == 0 else arrow_body if i < len(STYLES) - 1 else arrow_end
-            stylized = "".join("\33[%dm" % style for style in styles) + text + "\33[0m"
-            arrow.append(stylized)
+            arrow.append(style % Styles.reverse % text)
         return "".join(arrow)
-
-    def colorize_words(words: Iterable[str], weighs: Iterable[float]) -> str:
-        result = []
-        for word, weigh in zip(words, weighs):
-            styles = STYLES[-1]
-            for i, color in enumerate(STYLES):
-                if weigh < (i + 1) / len(STYLES):
-                    styles = color
-                    break
-            word = "".join("\33[%dm" % style for style in styles) + word + "\33[0m"
-            result.append(word)
-        return result
 
     def normalization(values: Iterable[float]) -> np.array:
         values = np.asarray(values)
@@ -215,44 +321,62 @@ def print_doc(formatter, indexed_doc, words_weighs):
             values[j] = (i + 1) / k
         return values
 
-    @static(pattern=re.compile("(\33\[\d+m)"))
-    def cut(string: str, text_size: int):
-        def length(word: str):
-            found = re.findall(cut.pattern, word)
-            length = 0 if found is None else len("".join(found))
-            return len(word) - length
-
-        def chunks(line: str, max_line_length: int) -> Iterable[str]:
-            words = line.split(" ")
-            result = []
-            result_length = 0
-            for word in words:
-                word_length = length(word)
-                if result_length + word_length > max_line_length:
-                    yield " ".join(result) + " " * (text_size - result_length + 1)
-                    result_length = 0
-                    result = []
-                result_length += word_length + 1
+    def split(words, pattern):
+        result = []
+        for word in words:
+            if re.findall(pattern, word):
+                yield result
+                result = []
+            else:
                 result.append(word)
-            yield " ".join(result) + " " * (text_size - result_length + 1)
+        yield result
 
-        lines = (sub_line for line in string.split("\n") for sub_line in chunks(line, text_size))
-        return lines
-
-    text_size = formatter.row_size(-1) - 1
-    formatter.print("", " " + next(cut(legend(), text_size)))
-    for word_weight in words_weighs:
-        maximum = np.max(word_weight)
-        minimum = np.min(word_weight)
-        mean = np.mean(word_weight)
-        variance = np.var(word_weight)
+    text_size = formatter.size - 2
+    for line in cut(legend(), text_size, Align.center):
+        formatter.print(line)
+    for weighs in words_weighs:
+        maximum = np.max(weighs)
+        minimum = np.min(weighs)
+        mean = np.mean(weighs)
+        variance = np.var(weighs)
         text = "m[W] = {:.4f}, d[W] = {:.4f}, min(W) = {:.4f}, max(W) = {:.4f}"
-        text = text.format(mean, variance, minimum, maximum)
-        formatter.print("", "")
-        formatter.print("", " " + next(cut(text, text_size)))
+        formatter.print(text.format(mean, variance, minimum, maximum))
         words = (Embeddings.words().get_name(index) for index in indexed_doc)
-        weighs = top_k_normalization(6, word_weight)
-        # weighs = normalization(words_weighs[i])
-        words = colorize_words(words, weighs)
-        for line in cut(" ".join(words), text_size):
-            formatter.print("", " " + line)
+        # weighs = top_k_normalization(6, weighs)
+        # weighs = normalization(weighs)
+        colorized = []
+        for word, weigh in zip(words, weighs):
+            style = STYLES[-1]
+            for i, color in enumerate(STYLES):
+                if weigh < (i + 1) / len(STYLES):
+                    style = color
+                    break
+            colorized.append(style % word)
+        for text in split(colorized, NEXT):
+            formatter.print("")
+            for line in cut(" ".join(text), text_size, Align.left):
+                formatter.print(line)
+
+
+def print_raw_tokens(formatter, raw_tokens):
+    matrix = [[None for _ in range(len(raw_tokens))] for _ in range(len(Embeddings.tokens()))]
+    for j, raw_token in enumerate(raw_tokens):
+        color0 = lambda x: Styles.background.light_yellow if x > 1e-2 else Styles.foreground.gray
+        color1 = lambda x, is_max: Styles.background.light_red if is_max else color0(x)
+        color = lambda x, is_max: color1(x, is_max) % "%.4f" % x
+        for i, value in enumerate(raw_token):
+            matrix[i][j] = color(value, i == np.argmax(raw_token))
+    for i, token in enumerate(Embeddings.tokens().idx2name):
+        text = " ".join(matrix[i])
+        for line in cut(text, formatter.row_size(-1), Align.left):
+            formatter.print(token, line)
+
+
+def print_strings(formatter, tokens, strings, strings_targets):
+    for token, string, target in zip(tokens, strings, strings_targets):
+        token = Embeddings.tokens().get_name(token)
+        string = (Embeddings.words().get_name(word) for word in string)
+        color = lambda skip: Styles.foreground.gray if skip else Styles.bold
+        string = (color(index == -1) % word for word, index in zip(string, target))
+        for line in cut(" ".join(string), formatter.row_size(-1), Align.left):
+            formatter.print(token, line)

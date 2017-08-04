@@ -25,6 +25,19 @@ def format_time(d: int, h: int, m: int, s: int, ms: int):
         return "{:03d}ms".format(ms)
 
 
+def optional_arg_decorator(func):
+    def wrapped_decorator(*args):
+        if len(args) == 1 and callable(args[0]):
+            return func(args[0])
+        else:
+            def real_decorator(decorate):
+                return func(decorate, *args)
+
+            return real_decorator
+
+    return wrapped_decorator
+
+
 def static(**kwargs):
     def decorate(func):
         for k in kwargs:
@@ -34,13 +47,14 @@ def static(**kwargs):
     return decorate
 
 
-def trace(func):
-    def wrapper(*args, **kwargs):
-        with Timer(func.__name__):
+@optional_arg_decorator
+def trace(func, name=None):
+    def wrapped(*args, **kwargs):
+        with Timer(name or func.__name__):
             result = func(*args, **kwargs)
         return result
 
-    return wrapper
+    return wrapped
 
 
 class Timer:
@@ -58,13 +72,9 @@ class Timer:
     def delay(self):
         return self.end - self.begin
 
-    @staticmethod
-    def log(text):
-        timing_logger.info(text)
-
     def __enter__(self):
         self.start()
-        self.log("process '%s' is started" % self.name)
+        timing_logger.info("process '%s' is started" % self.name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -72,7 +82,7 @@ class Timer:
         expanded = expand_time(self.delay())
         formatted = format_time(*expanded)
         formatter = "process '{}' worked for '{}'"
-        self.log(formatter.format(self.name, formatted))
+        timing_logger.info(formatter.format(self.name, formatted))
 
 
 class lazy:

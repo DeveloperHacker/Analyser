@@ -1,3 +1,4 @@
+import itertools
 import re
 from typing import Iterable
 
@@ -46,12 +47,9 @@ def anonymize_tags(string: str) -> str:
             if not in_block():
                 line.append(" %s " % HTML_BLOCK)
         elif not in_block():
-            line.append(" %s " % HTML_END if is_end_tag else HTML_BEGIN)
+            line.append(" %s " % (HTML_END if is_end_tag else HTML_BEGIN))
         index = end_index + 1
-    if in_block():
-        line.append(" %s " % HTML_BLOCK)
-    else:
-        line.append(string[index:])
+    line.append(" %s " % HTML_BLOCK if in_block() else string[index:])
     return "".join(line)
 
 
@@ -60,6 +58,10 @@ def expand_html_escapes(string: str) -> str:
     string = string.replace("&gt;", ">")
     string = string.replace("&amp;", "&")
     string = string.replace("&quot;", "\"")
+    string = string.replace("&ensp;", " ")
+    string = string.replace("&emsp;", " ")
+    string = string.replace("&thinsp;", " ")
+    string = string.replace("&nbsp;", " ")
     return string
 
 
@@ -72,60 +74,59 @@ def anonymize_paths(string: str) -> str:
 
 
 def anonymize_URLs(string: str) -> str:
-    return re.sub(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))",
-                  " %s " % URL, string)
+    pattern = re.compile(r"((\w+:(//|\\\\))?(\w+[\w.@]*\.[a-z]{2,3})(\w|\.|/|\\|\?|=|-)*)|(\w+:(//|\\\\))")
+    return re.sub(pattern, " %s " % URL, string)
 
 
 def anonymize_parameters_names(string: str, params: Iterable[str]) -> str:
     for i, param in enumerate(params):
-        string = string.replace(" %s " % param, " %s%d " % (VARIABLE, i))
+        code = ord('a') + i
+        assert ord('a') <= code <= ord('z')
+        name = " " + VARIABLE + chr(code) + " "
+        string = re.sub("[^\w]%s[^\w]" % param, name, string)
     return string
 
 
-def anonymize_functions_invocations(string: str) -> str:
-    space = r"(\s|\t)*"
-    word = r"(\@|[a-zA-Z])\w*"
-    param = r"({0}{1}{0}\=)?{0}{1}".format(space, word)
-    regex = r"{0}{1}({0}\(({2}({0}\,{2})*)?\))+".format(space, word, param)
-    return re.sub(regex, " %s " % INVOCATION, string)
-
-
 def anonymize_numbers(string: str) -> str:
-    return re.sub(r"[+-]?\d*[.,]?\d+", " %s " % NUMBER, string)
+    return re.sub(r"[+-]?\d*([.,]?\d+)+", " %s " % NUMBER, string)
 
 
 def expand_words_and_symbols(string: str) -> str:
-    return re.sub(r"(\.|\,|\:|\;|\(|\)|\{|\}|\-\-)", r" \1 ", string)
+    complex_logic = ('!=', '?=', '==', '<=>', '=>', '<=', '>=')
+    complex_op = ('+=', '-=', '&=', '^=', '/=', '*=', '%=', '@=', '--', '++', '?:')
+    brackets = ('<', '>', '(', ')', '{', '}', '[', ']')
+    operators = ('!', '=', '?', '^', '`', '%', '$', '*', '#', '/', '\\', '&')
+    punctuations = ('.', ',', ':', ';')
+    literals = itertools.chain(complex_logic, complex_op, brackets, operators, punctuations)
+    escaped = ("".join("\\" + ch for ch in literal) for literal in literals)
+    pattern = re.compile(r"(%s)" % "|".join(escaped))
+    return re.sub(pattern, r" \1 ", string)
 
 
 def replace_long_spaces(string: str) -> str:
-    return re.sub("(\s|\t)+", " ", string)
+    return re.sub("[\s\t]+", " ", string)
 
 
-def expand_camel_case_and_underscores(string: str):
-    string = string.replace("_", "")
-    string = re.sub(r"(\w)([A-Z])", r"\1 \2", string)
-    return string.lower()
+def expand_underscores(string: str):
+    return string.replace("_", " ")
 
 
-def apply_anonymizers(string: str, params: Iterable[str]) -> str:
+def expand_camel_case(string: str):
+    return re.sub(r"(\w)([A-Z][a-z0-9])", r"\1 \2", string)
+
+
+def apply(string: str, params: Iterable[str]) -> str:
     string = " %s " % string
     string = anonymize_parameters_names(string, params)
-    string = string.lower()
-    string = anonymize_quoted_strings(string)
+    string = anonymize_numbers(string)
     string = anonymize_tags(string)
+    string = anonymize_quoted_strings(string)
     string = expand_html_escapes(string)
     string = anonymize_links(string)
     string = anonymize_URLs(string)
-    string = anonymize_numbers(string)
-    string = anonymize_functions_invocations(string)
     string = anonymize_paths(string)
+    string = expand_underscores(string)
+    string = expand_camel_case(string)
     string = expand_words_and_symbols(string)
     string = replace_long_spaces(string)
-    return string.strip()
-
-
-def apply(method):
-    params = [param["name"] for param in method["description"]["parameters"]]
-    method["java-doc"] = {label: apply_anonymizers(text, params) for label, text in method["java-doc"].items()}
-    return method
+    return string.strip().lower()
