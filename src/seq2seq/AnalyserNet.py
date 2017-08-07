@@ -7,7 +7,6 @@ from tensorflow.python.ops.rnn_cell_impl import GRUCell
 from configurations.constants import *
 from configurations.logger import info_logger
 from configurations.paths import ANALYSER, ANALYSER_SUMMARIES
-from configurations.tags import PAD
 from seq2seq.Net import Net
 from seq2seq.analyser_rnn import *
 from seq2seq.misc import *
@@ -127,25 +126,19 @@ class AnalyserNet(Net):
 
     @trace("TRAIN NET")
     def train(self):
-        heads = ("epoch", "time", "train_accuracy", "train_loss", "validation_accuracy", "validation_loss")
+        heads = ("epoch", "time", "F1", "loss", "F1", "loss")
         formats = ("d", ".4f", ".4f", ".4f", ".4f", ".4f")
         formatter = Formatter(heads, formats, (9, 20, 20, 20, 21, 21), range(6), 10)
         figure = ProxyFigure("train", self.folder_path + "/train.png")
-        validation_loss_graph = figure.curve(3, 1, 1, mode="-r")
-        train_loss_graph = figure.curve(3, 1, 1, mode="-b")
-        smoothed_train_accuracy_graph = figure.smoothed_curve(3, 1, 3, 0.64, mode="-b")
-        smoothed_validation_accuracy_graph = figure.smoothed_curve(3, 1, 3, 0.64, mode="-r")
-        smoothed_false_negative_graph = figure.smoothed_curve(3, 1, 2, 0.64, mode="-m")
-        smoothed_true_negative_graph = figure.smoothed_curve(3, 1, 2, 0.64, mode="-y")
-        smoothed_false_positive_graph = figure.smoothed_curve(3, 1, 2, 0.64, mode="-r")
-        smoothed_true_positive_graph = figure.smoothed_curve(3, 1, 2, 0.64, mode="-g")
-        figure.set_y_label(3, 1, 1, "loss")
-        figure.set_y_label(3, 1, 2, "error")
-        figure.set_y_label(3, 1, 3, "accuracy")
-        figure.set_x_label(3, 1, 3, "epoch")
-        figure.set_label(3, 1, 1, "Train and validation losses")
-        figure.set_label(3, 1, 2, "Validation typed errors")
-        figure.set_label(3, 1, 3, "Train and validation accuracies")
+        validation_loss_graph = figure.curve(2, 1, 1, mode="-r")
+        train_loss_graph = figure.curve(2, 1, 1, mode="-b")
+        smoothed_train_f1_graph = figure.smoothed_curve(2, 1, 2, 0.64, mode="-b")
+        smoothed_validation_f1_graph = figure.smoothed_curve(2, 1, 2, 0.64, mode="-r")
+        figure.set_y_label(2, 1, 1, "loss")
+        figure.set_y_label(2, 1, 2, "accuracy")
+        figure.set_x_label(2, 1, 2, "epoch")
+        figure.set_label(2, 1, 1, "Train and validation losses")
+        figure.set_label(2, 1, 2, "Train and validation F1 score")
         config = tf.ConfigProto()
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         session = tf.Session(config=config)
@@ -161,55 +154,33 @@ class AnalyserNet(Net):
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     session.run(self.optimizer, feed_dict)
-                trains_loss, trains_accuracy = [], []
-                trains_true_positive, trains_true_negative = [], []
-                trains_false_negative, trains_false_positive = [], []
+                trains_loss, train_scores = [], []
                 for batch in train_set:
                     feed_dict = self.build_feed_dict(batch)
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    accuracy, errors = batch_accuracy(feed_dict[self.tokens_targets], tokens)
-                    trains_true_positive.extend(errors[0])
-                    trains_true_negative.extend(errors[1])
-                    trains_false_negative.extend(errors[2])
-                    trains_false_positive.extend(errors[3])
-                    trains_accuracy.append(accuracy)
+                    train_scores.append(batch_score(feed_dict[self.tokens_targets], tokens))
                     trains_loss.append(loss)
-                validations_loss, validations_accuracy = [], []
-                validations_true_positive, validations_true_negative = [], []
-                validations_false_negative, validations_false_positive = [], []
+                validations_loss, validation_scores = [], []
                 for batch in validation_set:
                     feed_dict = self.build_feed_dict(batch)
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    accuracy, errors = batch_accuracy(feed_dict[self.tokens_targets], tokens)
-                    validations_true_positive.extend(errors[0])
-                    validations_true_negative.extend(errors[1])
-                    validations_false_negative.extend(errors[2])
-                    validations_false_positive.extend(errors[3])
-                    validations_accuracy.append(accuracy)
+                    validation_scores.append(batch_score(feed_dict[self.tokens_targets], tokens))
                     validations_loss.append(loss)
                 stop = time.time()
                 delay = stop - start
                 train_loss = np.mean(trains_loss)
                 validation_loss = np.mean(validations_loss)
-                train_accuracy = np.mean(trains_accuracy)
-                validation_accuracy = np.mean(validations_accuracy)
-                validation_false_negative = np.mean(validations_false_negative)
-                validation_false_positive = np.mean(validations_false_positive)
-                validation_true_negative = np.mean(validations_true_negative)
-                validation_true_positive = np.mean(validations_true_positive)
                 train_loss_graph.append(epoch, train_loss)
                 validation_loss_graph.append(epoch, validation_loss)
-                smoothed_train_accuracy_graph.append(epoch, train_accuracy)
-                smoothed_validation_accuracy_graph.append(epoch, validation_accuracy)
-                smoothed_false_negative_graph.append(epoch, validation_false_negative)
-                smoothed_false_positive_graph.append(epoch, validation_false_positive)
-                smoothed_true_negative_graph.append(epoch, validation_true_negative)
-                smoothed_true_positive_graph.append(epoch, validation_true_positive)
-                formatter.print(epoch, delay, train_accuracy, train_loss, validation_accuracy, validation_loss)
+                train_score = np.mean([score.F_score(1) for score in train_scores])
+                validation_score = np.mean([score.F_score(1) for score in validation_scores])
+                smoothed_train_f1_graph.append(epoch, train_score)
+                smoothed_validation_f1_graph.append(epoch, validation_score)
+                formatter.print(epoch, delay, train_score, train_loss, validation_score, validation_loss)
                 if np.isnan(train_loss) or np.isnan(validation_loss):
                     info_logger.info("NaN detected")
                     break
@@ -220,7 +191,7 @@ class AnalyserNet(Net):
 
     @trace("TEST NET")
     def test(self, model_path: str = None):
-        heads = ("accuracy", "tokens loss", "strings loss", "target", *(["output", "prob"] * TOP))
+        heads = ("F1", "tokens loss", "strings loss", "target", *(["output", "prob"] * TOP))
         formats = (*([".4f"] * 3), "s", *(["s", ".4f"] * TOP))
         sizes = (*([15] * 3), *([13] * (1 + 2 * TOP)))
         formatter = Formatter(heads, formats, sizes, range(4 + 2 * TOP))
@@ -235,6 +206,7 @@ class AnalyserNet(Net):
             session.run(tf.global_variables_initializer())
             self.restore(session, model_path)
             train_set, validation_set, test_set = self.data_set
+            scores = []
             for batch in test_set:
                 feed_dict = self.build_feed_dict(batch)
                 raw_tokens = session.run(self.raw_tokens, feed_dict)
@@ -249,8 +221,9 @@ class AnalyserNet(Net):
                 tokens_targets = feed_dict[self.tokens_targets]
                 strings_targets = feed_dict[self.strings_targets]
                 attention = transpose_attention(attention)
-                accuracy, errors = batch_accuracy(tokens_targets, tokens)
                 for i in range(BATCH_SIZE):
+                    _score = score(tokens_targets[i], tokens[i])
+                    scores.append(_score)
                     formatter.print_head()
                     for j in range(num_conditions):
                         for k in range(num_tokens):
@@ -260,7 +233,7 @@ class AnalyserNet(Net):
                             token_target = Embeddings.tokens().get_name(token_target)
                             top_tokens_indices = (Embeddings.tokens().get_name(i) for i in top_tokens_indices)
                             outputs = (e for p in zip(top_tokens_indices, top_tokens_probabilities) for e in p)
-                            formatter.print(accuracy[i], tokens_loss[i], strings_loss[i], token_target, *outputs)
+                            formatter.print(_score.F_score(1), tokens_loss[i], strings_loss[i], token_target, *outputs)
                         formatter0.print_delimiter()
                         print_strings(formatter0, tokens[i][j], strings[i][j], strings_targets[i][j])
                         formatter0.print_delimiter()
@@ -271,3 +244,5 @@ class AnalyserNet(Net):
                             formatter1.print_delimiter()
                         else:
                             formatter1.print_lower_delimiter()
+            _score = BatchScore(scores)
+            info_logger.info("F1 = %.4f" % _score.F_score(1))

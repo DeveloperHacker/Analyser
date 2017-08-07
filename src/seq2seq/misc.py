@@ -6,7 +6,7 @@ from typing import Iterable, Any, List, Union
 import numpy as np
 import tensorflow as tf
 
-from configurations.tags import NOP, NEXT
+from configurations.tags import NOP, NEXT, PAD
 from seq2seq import Embeddings
 from utils.wrappers import static
 
@@ -23,7 +23,7 @@ def cross_entropy_loss(targets, logits, default: int = None):
                 W = tf.to_float(tf.expand_dims(W, -1))
                 logits = (1 - W) * logits + W * default_value
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=targets, logits=logits)
-        loss = tf.reduce_mean(loss, list(range(1, len(loss.shape))))
+        loss = tf.reduce_sum(loss, list(range(1, len(loss.shape))))
     return loss
 
 
@@ -103,10 +103,95 @@ def nearest_correct(targets, outputs, fine_weigh):
     return result_tokens, result_strings, result_strings_mask
 
 
-def calc_accuracy(targets, outputs):
+EPSILON = 1e-10
+
+
+class Score:
+    def __init__(self, TP, TN, FP, FN):
+        self.TP = TP
+        self.TN = TN
+        self.FP = FP
+        self.FN = FN
+        self.Ps = self.TP + self.FP
+        self.Ns = self.TN + self.FN
+        self.T = self.TP + self.TN
+        self.F = self.FP + self.FN
+        self.P = self.TP + self.FN
+        self.N = self.TN + self.FP
+        self.ALL = self.P + self.N
+        self.TPR = self.TP / (self.P + EPSILON)
+        self.TNR = self.TN / (self.N + EPSILON)
+        self.PPV = self.TP / (self.Ps + EPSILON)
+        self.NPV = self.TN / (self.Ns + EPSILON)
+        self.FNR = 1 - self.TPR
+        self.FPR = 1 - self.TNR
+        self.FDR = 1 - self.PPV
+        self.FOR = 1 - self.NPV
+        self.ACC = self.T / self.ALL
+        self.MCC = (self.TP * self.TN - self.FP * self.FN) / (np.sqrt(self.Ps * self.P * self.N * self.Ns) + EPSILON)
+        self.BM = self.TPR + self.TNR - 1
+        self.MK = self.PPV + self.NPV - 1
+        self.recall = self.TPR
+        self.precision = self.PPV
+        self.accuracy = self.ACC
+        self.true_positive = self.TP
+        self.true_negative = self.TN
+        self.false_negative = self.FN
+        self.false_positive = self.FP
+
+    def F_score(self, beta):
+        beta = beta * beta
+        return (1 + beta) * self.PPV * self.TPR / (beta * self.PPV + self.TPR + EPSILON)
+
+    def E_score(self, alpha):
+        return 1 - self.PPV * self.TPR / (alpha * self.TPR + (1 - alpha) * self.PPV + EPSILON)
+
+
+class BatchScore:
+    def __init__(self, scores: List[Score]):
+        self.scores = scores
+        self.TP = np.mean([score.TP / score.ALL for score in scores])
+        self.TN = np.mean([score.TN / score.ALL for score in scores])
+        self.FP = np.mean([score.FP / score.ALL for score in scores])
+        self.FN = np.mean([score.FN / score.ALL for score in scores])
+        self.Ps = self.TP + self.FP
+        self.Ns = self.TN + self.FN
+        self.T = self.TP + self.TN
+        self.F = self.FP + self.FN
+        self.P = self.TP + self.FN
+        self.N = self.TN + self.FP
+        self.ALL = self.P + self.N
+        self.TPR = np.mean([score.TPR for score in scores])
+        self.TNR = np.mean([score.TNR for score in scores])
+        self.PPV = np.mean([score.PPV for score in scores])
+        self.NPV = np.mean([score.NPV for score in scores])
+        self.FNR = np.mean([score.FNR for score in scores])
+        self.FPR = np.mean([score.FPR for score in scores])
+        self.FDR = np.mean([score.FDR for score in scores])
+        self.FOR = np.mean([score.FOR for score in scores])
+        self.ACC = np.mean([score.ACC for score in scores])
+        self.MCC = np.mean([score.MCC for score in scores])
+        self.BM = np.mean([score.BM for score in scores])
+        self.MK = np.mean([score.MK for score in scores])
+        self.recall = self.TPR
+        self.precision = self.PPV
+        self.accuracy = self.ACC
+        self.true_positive = self.TP
+        self.true_negative = self.TN
+        self.false_negative = self.FN
+        self.false_positive = self.FP
+
+    def F_score(self, beta):
+        return np.mean([score.F_score(beta) for score in self.scores])
+
+    def E_score(self, alpha):
+        return np.mean([score.E_score(alpha) for score in self.scores])
+
+
+def score(targets, outputs):
     length = outputs.shape[0]
     nop = Embeddings.tokens().get_index(NOP)
-    is_nop = lambda condition: all(token == nop for token in condition)
+    is_nop = lambda condition: all(nop == condition[:1])
     output_nops = [j for j in range(length) if is_nop(outputs[j])]
     target_nops = [j for j in range(length) if is_nop(targets[j])]
     output_indexes = [j for j in range(length) if j not in output_nops]
@@ -118,27 +203,18 @@ def calc_accuracy(targets, outputs):
         false_positive += 1
         for j in range(len(target_indexes)):
             output_target = targets[target_indexes[j]]
-            if all(token in output_target for token in outputs[i]):
+            if all(target == output for target, output in zip(output_target, outputs[i])):
                 del target_indexes[j]
                 true_positive += 1
                 false_positive -= 1
                 break
     false_negative = len(target_indexes)
-    error = true_positive + false_negative + false_positive
-    accuracy = true_positive / error
-    error += true_negative
-    true_positive /= error
-    true_negative /= error
-    false_negative /= error
-    false_positive /= error
-    return accuracy, (true_positive, true_negative, false_negative, false_positive)
+    return Score(true_positive, true_negative, false_positive, false_negative)
 
 
-def batch_accuracy(targets, outputs):
-    results = (calc_accuracy(target, output) for target, output in zip(targets, outputs))
-    results = zip(*((result[0], *result[1]) for result in results))
-    accuracy, true_positive, true_negative, false_negative, false_positive = results
-    return accuracy, (true_positive, true_negative, false_negative, false_positive)
+def batch_score(targets, outputs) -> List[Score]:
+    scores = [score(target, output) for target, output in zip(targets, outputs)]
+    return BatchScore(scores)
 
 
 def transpose_attention(attentions, num_heads=1):
@@ -321,10 +397,10 @@ def print_doc(formatter, indexed_doc, words_weighs):
             values[j] = (i + 1) / k
         return values
 
-    def split(words, pattern):
+    def split(words, *patterns):
         result = []
         for word in words:
-            if re.findall(pattern, word):
+            if any(re.findall(pattern, word) for pattern in patterns):
                 yield result
                 result = []
             else:
@@ -352,8 +428,9 @@ def print_doc(formatter, indexed_doc, words_weighs):
                     style = color
                     break
             colorized.append(style % word)
-        for text in split(colorized, NEXT):
-            formatter.print("")
+        for text in split(colorized, NEXT, PAD):
+            if len(text) == 0:
+                continue
             for line in cut(" ".join(text), text_size, Align.left):
                 formatter.print(line)
 

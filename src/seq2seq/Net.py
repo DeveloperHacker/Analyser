@@ -6,7 +6,7 @@ from typing import Iterable
 
 import tensorflow as tf
 
-from utils.wrappers import lazy
+from utils.wrappers import memoize
 
 time_format = "%d-%m-%Y-%H-%M-%S"
 time_pattern = "\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}"
@@ -15,11 +15,11 @@ model_pattern = re.compile("model-(%s)\.ckpt\.meta" % time_pattern)
 
 
 class Net(metaclass=ABCMeta):
-    @lazy.read_only_property
+    @memoize.read_only_property
     def saver(self) -> tf.train.Saver:
         return tf.train.Saver(var_list=self.variables)
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def variables(self) -> Iterable[tf.Variable]:
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
 

@@ -8,7 +8,7 @@ from configurations.constants import EMBEDDING_SIZE
 from configurations.paths import EMBEDDINGS
 from configurations.tags import GO, PAD, NOP
 from utils import dumpers
-from utils.wrappers import lazy
+from utils.wrappers import memoize
 
 
 # ToDo: thread save
@@ -21,23 +21,23 @@ class Embeddings:
     def instance(self) -> List[Tuple[str, np.array]]:
         return self._instance
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def name2emb(self) -> Dict[str, np.array]:
         return {name: embedding for name, embedding in self._instance}
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def idx2name(self) -> List[str]:
         return [name for name, embedding in self.instance]
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def idx2emb(self) -> List[np.ndarray]:
         return [embedding for name, embedding in self.instance]
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def emb2idx(self) -> Dict[Tuple[np.dtype], int]:
         return {tuple(embedding): index for index, (name, embedding) in enumerate(self.instance)}
 
-    @lazy.read_only_property
+    @memoize.read_only_property
     def name2idx(self) -> dict:
         return {word: i for i, (word, embedding) in enumerate(self.instance)}
 
@@ -76,7 +76,7 @@ class Embeddings:
         return len(self.instance)
 
 
-@lazy.function
+@memoize.function
 def words() -> Embeddings:
     instance = dumpers.pkl_load(EMBEDDINGS)
     instance[GO] = np.ones([EMBEDDING_SIZE], np.float32)
@@ -86,7 +86,7 @@ def words() -> Embeddings:
     return Embeddings(instance, "UNK")
 
 
-@lazy.function
+@memoize.function
 def tokens() -> Embeddings:
     Tokens.register(MarkerToken(NOP))
     names = list(Predicates.names) + list(Markers.names)
@@ -95,7 +95,7 @@ def tokens() -> Embeddings:
     return Embeddings(instance)
 
 
-@lazy.function
+@memoize.function
 def labels() -> Embeddings:
     names = list(Labels.names)
     embeddings = list(np.eye(len(names)))

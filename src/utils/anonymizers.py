@@ -78,15 +78,6 @@ def anonymize_URLs(string: str) -> str:
     return re.sub(pattern, " %s " % URL, string)
 
 
-def anonymize_parameters_names(string: str, params: Iterable[str]) -> str:
-    for i, param in enumerate(params):
-        code = ord('a') + i
-        assert ord('a') <= code <= ord('z')
-        name = " " + VARIABLE + chr(code) + " "
-        string = re.sub("[^\w]%s[^\w]" % param, name, string)
-    return string
-
-
 def anonymize_numbers(string: str) -> str:
     return re.sub(r"[+-]?\d*([.,]?\d+)+", " %s " % NUMBER, string)
 
@@ -112,15 +103,16 @@ def expand_underscores(string: str):
 
 
 def expand_camel_case(string: str):
-    return re.sub(r"(\w)([A-Z][a-z0-9])", r"\1 \2", string)
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1 \2', string)
+    return re.sub('([a-z0-9])([A-Z])', r'\1 \2', s1)
 
 
 def apply(string: str, params: Iterable[str]) -> str:
     string = " %s " % string
-    string = anonymize_parameters_names(string, params)
+    # string = anonymize_parameters_names(string, params)
     string = anonymize_numbers(string)
     string = anonymize_tags(string)
-    string = anonymize_quoted_strings(string)
+    # string = anonymize_quoted_strings(string)
     string = expand_html_escapes(string)
     string = anonymize_links(string)
     string = anonymize_URLs(string)

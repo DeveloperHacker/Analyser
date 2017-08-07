@@ -16,7 +16,7 @@ from pyparsing import ParseException
 
 from configurations.constants import OUTPUT_TYPE, BATCH_SIZE
 from configurations.logger import info_logger
-from configurations.tags import PAD, NOP, NEXT, VARIABLE, PARTS
+from configurations.tags import PAD, NOP, NEXT, PARTS
 from seq2seq import Embeddings
 from utils import anonymizers
 
@@ -29,10 +29,7 @@ def empty(method):
 
 
 def join_java_doc(method):
-    params = (param["name"] for param in method["description"]["parameters"])
-    java_doc = {VARIABLE: " ".join(["%s%d %s" % (VARIABLE, i, name) for i, name in enumerate(params)])}
-    for label, text in method["java-doc"].items():
-        java_doc[label] = " ".join(text)
+    java_doc = {label: " ".join(text) for label, text in method["java-doc"].items()}
     method["java-doc"] = java_doc
     return method
 
@@ -101,7 +98,8 @@ def standardify_contract(method):
         return node
 
     def expand(node: Node):
-        children = (Markers.PARAM, Markers.PARAM_0, Markers.PARAM_1, Markers.PARAM_2, Markers.PARAM_3, Markers.PARAM_4,
+        children = (Markers.PARAM, Markers.PARAM_0, Markers.PARAM_1,
+                    Markers.PARAM_2, Markers.PARAM_3, Markers.PARAM_4,
                     Markers.RESULT, Markers.STRING, Predicates.GET)
         if node.token in children and (node.parent is None or node.parent.token == Predicates.FOLLOW):
             node = Node(Predicates.EQUAL, (node, Node(Markers.TRUE)), node.parent)
@@ -175,6 +173,10 @@ def parse_contract(method):
             info_logger.info(line)
             if i + 1 == ex.lineno:
                 info_logger.info("~" * ex.col + "^")
+        raise ex
+    except AssertionError as ex:
+        for line in method["contract"]:
+            info_logger.info(line)
         raise ex
     compiler = AstDfsGuide(AstCompiler())
     method["contract"] = [compiler.accept(tree) for tree in forest]

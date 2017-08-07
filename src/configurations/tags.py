@@ -1,11 +1,10 @@
 HEAD = "@head"
 PARAMETER = "@param"
 RETURN = "@return"
-VARIABLE = "@var"
 THROW = "@throw"
 SEE = "@see"
 
-PARTS = (HEAD, PARAMETER, RETURN, VARIABLE, THROW, SEE)
+PARTS = (HEAD, PARAMETER, RETURN, THROW, SEE)
 
 STRING = "@string"
 NUMBER = "@number"

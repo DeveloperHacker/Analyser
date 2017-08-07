@@ -1,3 +1,4 @@
+import collections
 import time
 
 from configurations.logger import timing_logger
@@ -85,7 +86,7 @@ class Timer:
         timing_logger.info(formatter.format(self.name, formatted))
 
 
-class lazy:
+class memoize:
     @staticmethod
     def read_only_property(func):
         attr_name = "_lazy_" + func.__name__
@@ -120,23 +121,31 @@ class lazy:
 
     @staticmethod
     def method(func):
-        attr_name = "_lazy_" + func.__name__
+        attr_name = "_cache_" + func.__name__
 
-        def _method(self, *args, **kwargs):
+        def _method(self, *args):
+            if not isinstance(args, collections.Hashable):
+                return func(self, *args)
             if not hasattr(self, attr_name):
-                setattr(self, attr_name, func(self, *args, **kwargs))
-            return getattr(self, attr_name)
+                setattr(self, attr_name, {})
+            cache = getattr(self, attr_name)
+            if args not in cache:
+                value = func(self, *args)
+                cache[args] = value
+            return cache[args]
 
         return _method
 
     @staticmethod
     def function(func):
-        instance = None
+        cache = {}
 
-        def _function(*args, **kwargs):
-            nonlocal instance
-            if instance is None:
-                instance = func(*args, **kwargs)
-            return instance
+        def _function(*args):
+            if not isinstance(args, collections.Hashable):
+                return func(*args)
+            if args not in cache:
+                value = func(*args)
+                cache[args] = value
+            return cache[args]
 
         return _function

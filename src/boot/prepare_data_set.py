@@ -126,7 +126,7 @@ class Statistic:
 
 
 @trace("PREPARE DATA-SET")
-def prepare_data_set(*, dump: bool = True):
+def prepare_data_set():
     statistic = Statistic()
     methods = dumpers.json_load(ANALYSER_RAW_DATA_SET)
     statistic.num_methods = len(methods)
@@ -155,9 +155,8 @@ def prepare_data_set(*, dump: bool = True):
             statistic.num_batches = len(batches)
     with Timer("step 4"):
         random.shuffle(batches)
-    if dump:
-        with Timer("step 5"):
-            dumpers.pkl_dump(batches, ANALYSER_DATA_SET)
+    with Timer("step 5"):
+        dumpers.pkl_dump(batches, ANALYSER_DATA_SET)
     statistic.show()
     return batches
 
