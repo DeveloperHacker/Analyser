@@ -15,7 +15,7 @@ from contracts.TreeVisitor import TreeVisitor, TreeGuide
 from contracts.Validator import is_param, Validator
 from pyparsing import ParseException
 
-from configurations.constants import OUTPUT_TYPE, BATCH_SIZE
+from configurations.constants import OUTPUT_TYPE, BATCH_SIZE, MAX_PARAM
 from configurations.fields import CONTRACT, JAVA_DOC, DESCRIPTION
 from configurations.logger import info_logger
 from configurations.tags import PAD, NOP, NEXT, PARTS, SIGNATURE, PARAMETER
@@ -34,14 +34,10 @@ def convert(token: Token) -> str:
             return Tokens.LOWER_OR_EQUAL
     if token.type == Types.MARKER:
         name = token.name
-        if is_param(name) and int(name[len(Tokens.PARAM) + 1:-1]) > 5:
+        if is_param(name) and int(name[len(Tokens.PARAM) + 1:-1]) > MAX_PARAM:
             name = Tokens.PARAM
         return name
-    if token.type == Types.LABEL:
-        return None
-    if token.type == Types.ROOT:
-        return None
-    return token.name
+    raise Exception("Token '%s' is not convertible" % str(token))
 
 
 def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[str]]]]:
@@ -105,14 +101,17 @@ def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[
     return result
 
 
-def convert_from(contract: List[Tuple[List[str], Dict[int, List[str]]]]) -> Tree:
+def convert_from(contract: List[Tuple[List[str], List[List[str]]]]) -> Tree:
     names = [Tokens.ROOT]
-    for i in range(max(len(tokens), len(strings))):
-        for j, token in enumerate(tokens[i]):
+    for tokens, strings in contract:
+        names.append(Tokens.STRONG)
+        for token, string in zip(tokens, strings):
             if token == Types.STRING:
-                string = strings[i][j]
-                token = "\"%s\"" % " ".join(string)
+                pass
+            if token == Tokens.PARAM:
+                token = Tokens.PARAM + "[%s]" % (MAX_PARAM + 1)
             names.append(token)
+
     tokens = Decompiler.typing(names)
     if OUTPUT_TYPE in ("tree", "bfs_sequence"):
         tree = Decompiler.bfs(tokens)
