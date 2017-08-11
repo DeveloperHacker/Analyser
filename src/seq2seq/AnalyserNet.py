@@ -232,7 +232,7 @@ class AnalyserNet(Net):
                             top_tokens_probabilities = top_tokens.values[i][j][k]
                             token_target = Embeddings.tokens().get_name(token_target)
                             top_tokens_indices = (Embeddings.tokens().get_name(i) for i in top_tokens_indices)
-                            outputs = (e for p in zip(top_tokens_indices, top_tokens_probabilities) for e in p)
+                            outputs = itertools.chain(*zip(top_tokens_indices, top_tokens_probabilities))
                             formatter.print(_score.F_score(1), tokens_loss[i], strings_loss[i], token_target, *outputs)
                         formatter0.print_delimiter()
                         print_strings(formatter0, tokens[i][j], strings[i][j], strings_targets[i][j])

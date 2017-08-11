@@ -1,12 +1,11 @@
 from typing import List, Dict, Tuple
 
 import numpy as np
-from contracts.tokens import Tokens, Labels, Predicates, Markers
-from contracts.tokens.MarkerToken import MarkerToken
+from contracts import Tokens, Types
 
 from configurations.constants import EMBEDDING_SIZE
 from configurations.paths import EMBEDDINGS
-from configurations.tags import GO, PAD, NOP
+from configurations.tags import *
 from utils import dumpers
 from utils.wrappers import memoize
 
@@ -34,10 +33,6 @@ class Embeddings:
         return [embedding for name, embedding in self.instance]
 
     @memoize.read_only_property
-    def emb2idx(self) -> Dict[Tuple[np.dtype], int]:
-        return {tuple(embedding): index for index, (name, embedding) in enumerate(self.instance)}
-
-    @memoize.read_only_property
     def name2idx(self) -> dict:
         return {word: i for i, (word, embedding) in enumerate(self.instance)}
 
@@ -47,20 +42,16 @@ class Embeddings:
         if isinstance(key, (int, np.number)):
             index = int(key)
             if index < 0 or index >= len(self.instance):
-                raise Exception("Store with index '{}' is not found".format(key))
+                raise Exception("Store with index '%d' hasn't found" % key)
         elif isinstance(key, str):
             if key in self.name2idx:
                 index = self.name2idx[key]
             elif self.default_name is not None:
                 index = self.name2idx[self.default_name]
             else:
-                raise Exception("Store with name '{}' is not found".format(key))
+                raise Exception("Store with name '%s' hasn't found" % key)
         else:
-            key = tuple(key)
-            if key in self.emb2idx:
-                index = self.emb2idx[key]
-            else:
-                raise Exception("Store with embedding '{}' is not found".format(key))
+            raise Exception("Key with type %s hasn't supported" % type(key))
         return index, self.idx2name[index], self.idx2emb[index]
 
     def get_index(self, key) -> int:
@@ -88,16 +79,8 @@ def words() -> Embeddings:
 
 @memoize.function
 def tokens() -> Embeddings:
-    Tokens.register(MarkerToken(NOP))
-    names = list(Predicates.names) + list(Markers.names)
-    embeddings = list(np.eye(len(names)))
-    instance = list(zip(names, embeddings))
-    return Embeddings(instance)
-
-
-@memoize.function
-def labels() -> Embeddings:
-    names = list(Labels.names)
+    names = Tokens.instances[Types.OPERATOR] + Tokens.instances[Types.MARKER]
+    names += (NOP, PARAM_0, PARAM_1, PARAM_2, PARAM_3, PARAM_4, PARAM_5, Types.STRING)
     embeddings = list(np.eye(len(names)))
     instance = list(zip(names, embeddings))
     return Embeddings(instance)

@@ -1,9 +1,8 @@
-from multiprocessing.pool import Pool
-
 import tensorflow as tf
 
 from boot import prepares
 from configurations.constants import TRAIN_EPOCHS, WINDOW_SIZE, EMBEDDING_SIZE
+from configurations.fields import JAVA_DOC
 from configurations.paths import *
 from utils import dumpers, generators
 from utils.wrappers import trace
@@ -13,13 +12,8 @@ from word2vec import word2vec_optimized as word2vec
 @trace("PREPARE DATA-SET")
 def prepare_data_set():
     methods = dumpers.json_load(FULL_DATA_SET)
-    with Pool() as pool:
-        methods = (method for method in methods if not prepares.empty(method))
-        methods = pool.map(prepares.join_java_doc, methods)
-        methods = pool.map(prepares.apply_anonymizers, methods)
-        methods = (method for method in methods if not prepares.empty(method))
-        methods = pool.map(prepares.one_line_doc, methods)
-        docs = (method["java-doc"] for method in methods)
+    methods = prepares.java_doc(methods)
+    docs = (method[JAVA_DOC] for method in methods)
     with open(FILTERED, "w") as file:
         file.write("\n".join(docs))
 

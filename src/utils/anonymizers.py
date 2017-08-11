@@ -1,6 +1,4 @@
-import itertools
 import re
-from typing import Iterable
 
 from configurations.tags import *
 
@@ -12,6 +10,14 @@ def anonymize_quoted_strings(string: str) -> str:
 
 
 def anonymize_tags(string: str) -> str:
+    def skip():
+        result = pair is None
+        result = result or name in skip_tags
+        result = result or is_end_tag and string[pair[4] + 1:begin_index].isalpha()
+        result = result or not is_end_tag and string[end_index + 1:pair[3]].isalpha()
+        return result
+
+    skip_tags = ("p", "b", "i", "u")
     tags = []
     stacks = {}
     begin_index = None
@@ -24,32 +30,29 @@ def anonymize_tags(string: str) -> str:
             name = tag[2:-1] if is_end_tag else tag[1:-1]
             if name not in stacks:
                 stacks[name] = []
-            is_complete = False
+            tag = [is_end_tag, None, name, begin_index, i]
             if not is_end_tag:
                 index = len(tags)
                 stacks[name].append(index)
             elif len(stacks[name]) > 0:
                 index = stacks[name][-1]
                 del stacks[name][-1]
-                tags[index][1] = True
-                is_complete = True
-            tags.append([is_end_tag, is_complete, name, begin_index, i])
+                tags[index][1] = tag
+                tag[1] = tags[index]
+            tags.append(tag)
     line = []
     index = 0
     nesting = {}
     in_block = lambda: any(inst > 0 for name, inst in nesting.items())
-    for is_end_tag, is_complete, name, begin_index, end_index in tags:
+    for is_end_tag, pair, name, begin_index, end_index in tags:
         if not in_block():
             line.append(string[index:begin_index])
-        if is_complete:
+        if not skip():
             nesting[name] = nesting.get(name, 0) + (-1 if is_end_tag else 1)
-            assert nesting[name] >= 0
             if not in_block():
                 line.append(" %s " % HTML_BLOCK)
-        elif not in_block():
-            line.append(" %s " % (HTML_END if is_end_tag else HTML_BEGIN))
         index = end_index + 1
-    line.append(" %s " % HTML_BLOCK if in_block() else string[index:])
+    line.append(" %s " % HTML_BLOCK if in_block() and not skip() else string[index:])
     return "".join(line)
 
 
@@ -66,7 +69,7 @@ def expand_html_escapes(string: str) -> str:
 
 
 def anonymize_links(string: str) -> str:
-    return re.sub("(\{@|@\{).*\}", " %s " % LINK, string)
+    return re.sub("(\{@|@\{).*?\}", " %s " % LINK, string)
 
 
 def anonymize_paths(string: str) -> str:
@@ -83,12 +86,13 @@ def anonymize_numbers(string: str) -> str:
 
 
 def expand_words_and_symbols(string: str) -> str:
-    complex_logic = ('!=', '?=', '==', '<=>', '=>', '<=', '>=')
-    complex_op = ('+=', '-=', '&=', '^=', '/=', '*=', '%=', '@=', '--', '++', '?:')
+    complex_logic = ('!=', '?=', '==', '<=>', '=>', '<=', '>=', "->", "<-", "<->", "===")
+    complex_op = ('+=', '-=', '&=', '^=', '/=', '*=', '%=', '@=', '--', '++', '?:', ":-", "::-", ":=", "::=")
     brackets = ('<', '>', '(', ')', '{', '}', '[', ']')
     operators = ('!', '=', '?', '^', '`', '%', '$', '*', '#', '/', '\\', '&')
     punctuations = ('.', ',', ':', ';')
-    literals = itertools.chain(complex_logic, complex_op, brackets, operators, punctuations)
+    quotes = ("'", '"')
+    literals = complex_logic + complex_op + brackets + operators + punctuations + quotes
     escaped = ("".join("\\" + ch for ch in literal) for literal in literals)
     pattern = re.compile(r"(%s)" % "|".join(escaped))
     return re.sub(pattern, r" \1 ", string)
@@ -107,12 +111,10 @@ def expand_camel_case(string: str):
     return re.sub('([a-z0-9])([A-Z])', r'\1 \2', s1)
 
 
-def apply(string: str, params: Iterable[str]) -> str:
+def apply(string: str) -> str:
     string = " %s " % string
-    # string = anonymize_parameters_names(string, params)
     string = anonymize_numbers(string)
     string = anonymize_tags(string)
-    # string = anonymize_quoted_strings(string)
     string = expand_html_escapes(string)
     string = anonymize_links(string)
     string = anonymize_URLs(string)
@@ -121,4 +123,5 @@ def apply(string: str, params: Iterable[str]) -> str:
     string = expand_camel_case(string)
     string = expand_words_and_symbols(string)
     string = replace_long_spaces(string)
-    return string.strip().lower()
+    string = string.strip().lower()
+    return string

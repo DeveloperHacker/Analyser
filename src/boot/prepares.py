@@ -1,122 +1,236 @@
+import itertools
 import random
-from typing import Iterable, List, Any
+import re
+from multiprocessing.pool import Pool
+from typing import Iterable, List, Any, Dict, Tuple
 
 import numpy as np
-from contracts.guides.AstBfsGuide import AstBfsGuide
-from contracts.guides.AstDfsGuide import AstDfsGuide
-from contracts.nodes import StringNode
-from contracts.nodes.Ast import Ast
-from contracts.nodes.Node import Node
-from contracts.parser import Parser
-from contracts.tokens import Predicates, Markers
-from contracts.tokens.Labels import WEAK
-from contracts.visitors.AstCompiler import AstCompiler
-from contracts.visitors.AstVisitor import AstVisitor
+from contracts import Parser, Tokens, Types, Decompiler
+from contracts.BfsGuide import BfsGuide
+from contracts.DfsGuide import DfsGuide
+from contracts.Node import Node
+from contracts.Token import Token
+from contracts.Tree import Tree
+from contracts.TreeVisitor import TreeVisitor, TreeGuide
+from contracts.Validator import is_param, Validator
 from pyparsing import ParseException
 
 from configurations.constants import OUTPUT_TYPE, BATCH_SIZE
+from configurations.fields import CONTRACT, JAVA_DOC, DESCRIPTION
 from configurations.logger import info_logger
-from configurations.tags import PAD, NOP, NEXT, PARTS
+from configurations.tags import PAD, NOP, NEXT, PARTS, SIGNATURE, PARAMETER
 from seq2seq import Embeddings
 from utils import anonymizers
+from utils.wrappers import trace, static
+
+
+def convert(token: Token) -> str:
+    if token.type == Types.STRING:
+        return Types.STRING
+    if token.type == Types.OPERATOR:
+        if token.name == Tokens.GREATER_OR_EQUAL:
+            return Tokens.LOWER
+        if token.name == Tokens.GREATER:
+            return Tokens.LOWER_OR_EQUAL
+    if token.type == Types.MARKER:
+        name = token.name
+        if is_param(name) and int(name[len(Tokens.PARAM) + 1:-1]) > 5:
+            name = Tokens.PARAM
+        return name
+    if token.type == Types.LABEL:
+        return None
+    if token.type == Types.ROOT:
+        return None
+    return token.name
+
+
+def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[str]]]]:
+    @static(trees={1: Node(Token(NOP, Types.MARKER))})
+    def empty(height: int) -> Node:
+        assert height > 0
+        if height not in empty.trees:
+            node = empty(height - 1)
+            token = empty.trees[1].token
+            node = Node(token, node, node)
+            empty.trees[height] = node
+        return empty.trees[height]
+
+    class Equalizer(TreeVisitor):
+        def __init__(self):
+            super().__init__(DfsGuide())
+            self.tree = None
+
+        def result(self) -> Tree:
+            return self.tree
+
+        def visit_tree(self, tree: Tree):
+            self.tree = tree
+
+        def visit_node_end(self, depth: int, node: Node, parent: Node):
+            diff = height - depth
+            if node.leaf() and diff > 0:
+                node.children.append(empty(diff))
+                node.children.append(empty(diff))
+
+    class Compiler(TreeVisitor):
+        def __init__(self, guide: TreeGuide):
+            super().__init__(guide)
+            self.tokens = None
+            self.strings = None
+
+        def result(self) -> Tuple[List[str], Dict[int, List[str]]]:
+            return self.tokens, self.strings
+
+        def visit_tree(self, tree: Tree):
+            self.tokens = []
+            self.strings = {}
+
+        def visit_string(self, depth: int, node: Node, parent: Node):
+            index = len(self.tokens)
+            string = node.token.name[1:-1].split()
+            self.strings[index] = string
+
+        def visit_node_end(self, depth: int, node: Node, parent: Node):
+            self.tokens.append(convert(node.token))
+
+    Validator().accept(tree)
+    equalizer = Equalizer()
+    tree = equalizer.accept(tree)
+    forest = [Tree(child.children[0]) for child in tree.root.children]
+    if OUTPUT_TYPE in ("tree", "bfs_sequence"):
+        compiler = Compiler(BfsGuide())
+    elif OUTPUT_TYPE == "dfs_sequence":
+        compiler = Compiler(DfsGuide())
+    result = [compiler.accept(tree) for tree in forest]
+    return result
+
+
+def convert_from(contract: List[Tuple[List[str], Dict[int, List[str]]]]) -> Tree:
+    names = [Tokens.ROOT]
+    for i in range(max(len(tokens), len(strings))):
+        for j, token in enumerate(tokens[i]):
+            if token == Types.STRING:
+                string = strings[i][j]
+                token = "\"%s\"" % " ".join(string)
+            names.append(token)
+    tokens = Decompiler.typing(names)
+    if OUTPUT_TYPE in ("tree", "bfs_sequence"):
+        tree = Decompiler.bfs(tokens)
+    elif OUTPUT_TYPE == "dfs_sequence":
+        tree = Decompiler.dfs(tokens)
+    return tree
 
 
 def empty(method):
-    for label, text in method["java-doc"].items():
+    for label, text in method[JAVA_DOC].items():
         if len(text) > 0:
             return False
     return True
 
 
 def join_java_doc(method):
-    java_doc = {label: " ".join(text) for label, text in method["java-doc"].items()}
-    method["java-doc"] = java_doc
+    java_doc = {label: " ".join(text) for label, text in method[JAVA_DOC].items()}
+    method[JAVA_DOC] = java_doc
+    return method
+
+
+def append_param_delimiter(method):
+    parameters = method[JAVA_DOC][PARAMETER]
+    parameters = [re.sub(r"(%s\s[^\s]+)" % PARAMETER, r"\1:", text) for text in parameters]
+    method[JAVA_DOC][PARAMETER] = parameters
+    return method
+
+
+def append_signature(method):
+    description = method[DESCRIPTION]
+    del method[DESCRIPTION]
+    name = description["name"]
+    owner = description["owner"]
+    result = description["type"]
+    parameters = description["parameters"]
+    parameters = [(parameter["name"], parameter["type"]) for parameter in parameters]
+    parameters = ", ".join("%s: %s" % parameter for parameter in parameters)
+    signature = "%s %s : %s(%s) %s" % (SIGNATURE, owner, name, parameters, result)
+    method[JAVA_DOC][SIGNATURE] = [signature]
     return method
 
 
 def apply_anonymizers(method):
-    params = [param["name"] for param in method["description"]["parameters"]]
-    java_doc = {label: anonymizers.apply(text, params) for label, text in method["java-doc"].items()}
-    method["java-doc"] = java_doc
+    java_doc = {label: anonymizers.apply(text) for label, text in method[JAVA_DOC].items()}
+    method[JAVA_DOC] = java_doc
     return method
 
 
 def one_line_doc(method):
-    java_doc = (method["java-doc"][label].strip() for label in PARTS)
+    java_doc = (method[JAVA_DOC][label].strip() for label in PARTS)
     java_doc = (" %s " % NEXT).join(text for text in java_doc if len(text) > 0)
-    method["java-doc"] = java_doc
+    method[JAVA_DOC] = java_doc
     return method
 
 
 def standardify_contract(method):
-    class AstMapper(AstVisitor):
+    class Mapper(TreeVisitor):
         def __init__(self, map_function):
-            self.tree = None
+            super().__init__(DfsGuide())
             self.map = map_function
 
-        def visit_end(self, ast: Ast):
-            ast.root = self.map(ast.root)
-            self.tree = ast
-
-        def visit_node_end(self, node: Node):
-            children = [self.map(child) for child in node.children]
+        def visit_node_end(self, depth: int, node: Node, parent: Node):
+            children = [self.map(child, parent) for child in node.children]
             node.children = children
 
-        def result(self):
-            return self.tree
+    def swap(node: Node, _: Node) -> Node:
+        if node.token.type == Types.OPERATOR and node.token.name in (Tokens.GREATER, Tokens.GREATER_OR_EQUAL):
+            left = node.children[0]
+            right = node.children[1]
+            token = Token(convert(node.token), Types.OPERATOR)
+            node = Node(token, right, left)
+        return node
 
-    def reduce(node: Node):
-        parent = node.parent
-        if node.token == Predicates.NOT_EQUAL:
+    def reduce(node: Node, _: Node) -> Node:
+        if node.token == Tokens.NOT_EQUAL:
             assert node.children is not None
             assert len(node.children) == 2
             left = node.children[0]
             right = node.children[1]
-            if left.token == Markers.FALSE:
+            if left.token == Tokens.FALSE:
                 node = right
-            elif right.token == Markers.FALSE:
+            elif right.token == Tokens.FALSE:
                 node = left
-            elif left.token == Markers.TRUE:
-                node.token = Predicates.EQUAL
-                left.token = Markers.FALSE
+            elif left.token == Tokens.TRUE:
+                node.token = Tokens.EQUAL
+                left.token = Tokens.FALSE
                 node.children = [right, left]
-            elif right.token == Markers.TRUE:
-                node.token = Predicates.EQUAL
-                right.token = Markers.FALSE
-        if node.token == Predicates.EQUAL:
+            elif right.token == Tokens.TRUE:
+                node.token = Tokens.EQUAL
+                right.token = Tokens.FALSE
+        if node.token == Tokens.EQUAL:
             assert node.children is not None
             assert len(node.children) == 2
             left = node.children[0]
             right = node.children[1]
-            if left.token == Markers.TRUE:
+            if left.token == Tokens.TRUE:
                 node = right
-            elif right.token == Markers.TRUE:
+            elif right.token == Tokens.TRUE:
                 node = left
-            elif left.token == Markers.FALSE:
+            elif left.token == Tokens.FALSE:
                 node.children = [right, left]
-        node.parent = parent
         return node
 
-    def expand(node: Node):
-        children = (Markers.PARAM, Markers.PARAM_0, Markers.PARAM_1,
-                    Markers.PARAM_2, Markers.PARAM_3, Markers.PARAM_4,
-                    Markers.RESULT, Markers.STRING, Predicates.GET)
-        if node.token in children and (node.parent is None or node.parent.token == Predicates.FOLLOW):
-            node = Node(Predicates.EQUAL, (node, Node(Markers.TRUE)), node.parent)
+    def expand(node: Node, parent: Node) -> Node:
+        children = (Tokens.RESULT, Tokens.GETATTR)
+        token = node.token
+        cond1 = token.name in children or is_param(token.name) or token.type == Types.STRING
+        cond2 = parent is not None and parent.token in (Tokens.ROOT, Tokens.FOLLOW)
+        if cond1 and cond2:
+            node = Node(Tokens.EQUAL, node, Node(Tokens.TRUE))
         return node
 
-    reducer = AstDfsGuide(AstMapper(reduce))
-    expander = AstDfsGuide(AstMapper(expand))
-    compiler = AstDfsGuide(AstCompiler())
-    forest = (Parser.parse_tree(*args) for args in method["contract"])
-    forest = (reducer.accept(tree) for tree in forest)
-    forest = list(expander.accept(tree) for tree in forest)
-    method["contract"] = [compiler.accept(tree) for tree in forest]
-    return method
-
-
-def filter_contract(method):
-    method["contract"] = [(label, tokens, strings) for label, tokens, strings in method["contract"] if label != WEAK]
+    tree = method[CONTRACT]
+    Validator().accept(tree)
+    Mapper(swap).accept(tree)
+    Mapper(reduce).accept(tree)
+    Mapper(expand).accept(tree)
+    method[CONTRACT] = tree
     return method
 
 
@@ -137,67 +251,58 @@ def batching(methods: Iterable[dict]):
 
 
 def filter_contract_text(method):
-    class StringFiltrator(AstVisitor):
-        def __init__(self, method):
-            super().__init__()
-            self._tree = None
-            self._params = [param["name"] for param in method["description"]["parameters"]]
+    class StringFiltrator(TreeVisitor):
+        def __init__(self):
+            super().__init__(DfsGuide())
 
-        def visit(self, ast: Ast):
-            self._tree = ast
+        def visit_string_end(self, depth: int, node: Node, parent: Node):
+            name = node.token.name
+            quote = name[0]
+            name = anonymizers.apply(name[1:-1])
+            name = quote + name + quote
+            node.token = Token(name, node.token.type)
 
-        def result(self):
-            return self._tree
-
-        def visit_string(self, node: StringNode):
-            string = " ".join(node.words)
-            string = anonymizers.apply(string, self._params)
-            node.words = string.split(" ")
-
-    filtrator = AstDfsGuide(StringFiltrator(method))
-    if OUTPUT_TYPE in ("tree", "bfs_sequence"):
-        compiler = AstBfsGuide(AstCompiler())
-    elif OUTPUT_TYPE == "dfs_sequence":
-        compiler = AstDfsGuide(AstCompiler())
-    forest = (Parser.parse_tree(*args) for args in method["contract"])
-    forest = (filtrator.accept(tree) for tree in forest)
-    method["contract"] = [compiler.accept(tree) for tree in forest]
+    tree = method[CONTRACT]
+    filtrator = StringFiltrator()
+    filtrator.accept(tree)
     return method
 
 
 def parse_contract(method):
     try:
-        forest = Parser.parse("\n".join(method["contract"]))
+        raw_code = method[CONTRACT]
+        code = "\n".join(raw_code)
+        tree = Parser.parse(code)
+        method[CONTRACT] = tree
     except ParseException as ex:
-        for i, line in enumerate(method["contract"]):
+        for i, line in enumerate(raw_code):
             info_logger.info(line)
             if i + 1 == ex.lineno:
                 info_logger.info("~" * ex.col + "^")
         raise ex
-    except AssertionError as ex:
-        for line in method["contract"]:
+    except Exception as ex:
+        for line in raw_code:
             info_logger.info(line)
         raise ex
-    compiler = AstDfsGuide(AstCompiler())
-    method["contract"] = [compiler.accept(tree) for tree in forest]
     return method
 
 
 def index_contract(method):
-    result = []
-    for label, tokens, strings in method["contract"]:
-        label = Embeddings.labels().get_index(label.name)
-        tokens = [Embeddings.tokens().get_index(token.name) for token in tokens]
-        strings = {idx: [Embeddings.words().get_index(word) for word in string] for idx, string in strings.items()}
-        result.append((label, tokens, strings))
-    method["contract"] = result
+    tree = method[CONTRACT]
+    tokens, strings = convert_to(tree)
+    result = [
+        ([Embeddings.tokens().get_index(token) for token in tokens[i]],
+         {idx: [Embeddings.words().get_index(word) for word in string] for idx, string in strings[i].items()})
+        for i in range(len(tokens))
+    ]
+    method[CONTRACT] = result
     return method
 
 
 def index_java_doc(method):
-    java_doc = (word.strip() for word in method["java-doc"].split(" "))
-    java_doc = tuple(Embeddings.words().get_index(word) for word in java_doc if len(word) > 0)
-    method["java-doc"] = java_doc
+    java_doc = (word.strip() for word in method[JAVA_DOC].split(" "))
+    java_doc = tuple(Embeddings.words().get_index(word) for word in java_doc)
+    method[JAVA_DOC] = java_doc
     return method
 
 
@@ -205,38 +310,38 @@ def build_batch(methods: List[dict]):
     pad = Embeddings.words().get_index(PAD)
     nop = Embeddings.tokens().get_index(NOP)
 
-    inputs = [method["java-doc"] for method in methods]
-    inputs_length = [len(line) for line in inputs]
+    inputs = (method[JAVA_DOC] for method in methods)
+    inputs = ((word.strip() for word in input.split(" ")) for input in inputs)
+    inputs = ((word for word in input if len(word) > 0) for input in inputs)
+    inputs = [[Embeddings.words().get_index(word) for word in input] for input in inputs]
+    inputs_length = [len(input) for input in inputs]
     inputs_steps = max(inputs_length)
-    inputs = [list(line) + [pad] * (inputs_steps + 1 - len(line)) for line in inputs]
+    inputs = [input + [pad] * (inputs_steps + 1 - len(input)) for input in inputs]
     inputs = np.asarray(inputs)
     inputs_length = np.asarray(inputs_length)
 
-    num_conditions = []
-    sequence_length = []
-    strings_lengths = [1]
-    for method in methods:
-        contract = method["contract"]
-        num_conditions.append(len(contract))
-        for raw_label, raw_instructions, raw_strings in contract:
-            sequence_length.append(len(raw_instructions))
-            strings_lengths.extend(len(string) for idx, string in raw_strings.items())
-    num_conditions = np.max(num_conditions)
-    sequence_length = np.max(sequence_length)
-    string_length = np.max(strings_lengths) + 1
-    tree_depth = np.int32(np.ceil(np.log2(sequence_length)))
-    if OUTPUT_TYPE == "tree":
-        sequence_length = 2 ** tree_depth - 1
+    contracts = [method[CONTRACT] for method in methods]
+    height = max(contract.height() for contract in contracts)
+    num_conditions = max(len(contract.root.children) for contract in contracts)
+    contracts = [convert_to(contract, height) for contract in contracts]
+    height -= 2
+    sequence_length = 2 ** height - 1
+
+    chain = itertools.chain
+    mapper = lambda x: x[1].values()
+    lengths = chain((0,), map(len, chain(*map(mapper, chain(*contracts)))))
+    string_length = max(lengths) + 1
 
     strings = []
     tokens = []
-    for method in methods:
-        _strings = [[[-1 for _ in range(string_length)] for _ in range(sequence_length)] for _ in range(num_conditions)]
-        _tokens = [[nop for _ in range(sequence_length)] for _ in range(num_conditions)]
-        for i, (raw_label, raw_instructions, raw_strings) in enumerate(method["contract"]):
-            _tokens[i][:len(raw_instructions)] = raw_instructions
-            _tokens[i][len(raw_instructions):] = [nop] * (sequence_length - len(raw_instructions))
+    for contract in contracts:
+        _strings = np.tile(-1, [num_conditions, sequence_length, string_length])
+        _tokens = np.tile(nop, [num_conditions, sequence_length])
+        for i, (raw_tokens, raw_strings) in enumerate(contract):
+            raw_tokens = [Embeddings.tokens().get_index(token) for token in raw_tokens]
+            _tokens[i][:len(raw_tokens)] = raw_tokens
             for idx, raw_string in raw_strings.items():
+                raw_string = [Embeddings.words().get_index(word) for word in raw_string]
                 _strings[i][idx][:len(raw_string)] = raw_string
                 _strings[i][idx][len(raw_string)] = pad
         strings.append(_strings)
@@ -246,40 +351,37 @@ def build_batch(methods: List[dict]):
 
     inputs = (inputs, inputs_length)
     outputs = (tokens, strings)
-    parameters = (num_conditions, sequence_length, string_length, tree_depth)
+    parameters = (num_conditions, sequence_length, string_length, height)
     return inputs, outputs, parameters
 
 
-# fixme: dirt
-def align_data_set(methods: Iterable[dict]):
-    # methods = tuple(methods)
-    # stats = []
-    # for method in methods:
-    #     token_counters = {}
-    #     for label, instructions, strings in method["contract"]:
-    #         for instruction in instructions:
-    #             name = instruction.token.name
-    #             token_counters[name] = token_counters.get(name, 0) + 1
-    #     stats.append(token_counters)
-    # token_counters = {}
-    # for stat in stats:
-    #     for name, number in stat.items():
-    #         token_counters[name] = token_counters.get(name, 0) + number
-    # max_value = max(token_counters.values())
-    # overhead = 10
-    # imbalance = 0.1
-    # part = 0.4
-    # lack = {name: part * max_value - number for name, number in token_counters.items() if number < part * max_value}
-    # stats = [[i, stat, 0] for i, stat in enumerate(stats) if any(name in lack for name in stat)]
-    # stop = False
-    # while not stop:
-    #     new_max_value = max(token_counters.values())
-    #     if max_value + overhead < new_max_value:
-    #         break
-    #     min_value = min(number for index, stat, number in stats)
-    #     stop = True
-    #     for i in range(len(stats)):
-    #         index, stat, number = stats[i]
-    #         if number * imbalance <
-    #     stats = [[index, stat, number] for index, stat, number in stats if any(lack.get(name, 0) > 0 for name in stat)]
-    return methods
+@trace("PREPARE JAVA-DOC")
+def java_doc(methods) -> List[dict]:
+    with Pool() as pool:
+        methods = (method for method in methods if not empty(method))
+        methods = pool.map(append_param_delimiter, methods)
+        methods = pool.map(append_signature, methods)
+        methods = pool.map(join_java_doc, methods)
+        methods = pool.map(apply_anonymizers, methods)
+        methods = (method for method in methods if not empty(method))
+        methods = pool.map(one_line_doc, methods)
+    return list(methods)
+
+
+@trace("PREPARE CONTRACT")
+def contract(methods) -> List[dict]:
+    with Pool() as pool:
+        methods = pool.map(parse_contract, methods)
+        methods = (method for method in methods if method[CONTRACT].height() > 1)
+        methods = pool.map(standardify_contract, methods)
+        methods = pool.map(filter_contract_text, methods)
+    return list(methods)
+
+
+@trace("PREPARE BATCHES")
+def batches(methods) -> list:
+    with Pool() as pool:
+        batches = batching(methods)
+        batches = pool.map(build_batch, batches)
+        random.shuffle(batches)
+    return list(batches)

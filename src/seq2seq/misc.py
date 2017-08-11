@@ -440,7 +440,7 @@ def print_raw_tokens(formatter, raw_tokens):
     for j, raw_token in enumerate(raw_tokens):
         color0 = lambda x: Styles.background.light_yellow if x > 1e-2 else Styles.foreground.gray
         color1 = lambda x, is_max: Styles.background.light_red if is_max else color0(x)
-        color = lambda x, is_max: color1(x, is_max) % "%.4f" % x
+        color = lambda x, is_max: color1(x, is_max) % "%.3f" % x
         for i, value in enumerate(raw_token):
             matrix[i][j] = color(value, i == np.argmax(raw_token))
     for i, token in enumerate(Embeddings.tokens().idx2name):
