@@ -10,8 +10,16 @@ from utils.wrappers import memoize
 
 time_format = "%d-%m-%Y-%H-%M-%S"
 time_pattern = "\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}"
-folder_pattern = re.compile("model-(%s)" % time_pattern)
 model_pattern = re.compile("model-(%s)\.ckpt\.meta" % time_pattern)
+
+
+def newest(path: str, filtrator):
+    try:
+        names = [path + "/" + name for name in os.listdir(path) if filtrator(path, name)]
+        names.sort(key=os.path.getmtime, reverse=True)
+        return names[0]
+    except ValueError:
+        raise FileNotFoundError("Saves in dir '%s' hasn't found" % path)
 
 
 class Net(metaclass=ABCMeta):
@@ -19,49 +27,24 @@ class Net(metaclass=ABCMeta):
     def saver(self) -> tf.train.Saver:
         return tf.train.Saver(var_list=self.variables)
 
-    @memoize.read_only_property
+    @property
     def variables(self) -> Iterable[tf.Variable]:
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
 
-    @property
-    def create_time(self):
-        if self._create_time is None:
-            self._create_time = time.strftime(time_format)
-        return self._create_time
-
-    @property
-    def folder_path(self) -> str:
-        return "{}/model-{}".format(self.save_path, self.create_time)
-
-    @property
-    def model_path(self) -> str:
-        return "{}/model-{}.ckpt".format(self.folder_path, time.strftime(time_format))
-
-    def __init__(self, name: str, save_path: str, scope=None):
-        self.save_path = save_path
-        self.name = name
+    def __init__(self, working_directory: str, scope=None):
+        save_time = time.strftime(time_format)
+        self.save_path = os.path.join(working_directory, "model-" + save_time)
         self.scope = scope
-        self._create_time = None
 
     def save(self, session: tf.Session):
-        if not os.path.isdir(self.folder_path):
-            os.mkdir(self.folder_path)
-        self.saver.save(session, self.model_path)
+        if not os.path.isdir(self.save_path):
+            os.mkdir(self.save_path)
+        save_time = time.strftime(time_format)
+        model_path = os.path.join(self.save_path, "model-%s.ckpt" % save_time)
+        self.saver.save(session, model_path)
 
-    def newest(self, path: str, filtrator):
-        names = [path + "/" + name for name in os.listdir(path) if filtrator(path, name)]
-        if len(names) == 0:
-            raise FileNotFoundError("Saves from {} net is not found".format(self.name))
-        names.sort(key=os.path.getmtime, reverse=True)
-        return names[0]
-
-    def restore(self, session: tf.Session, model_path: str = None):
-        folder_filtrator = lambda path, name: os.path.isdir(path + "/" + name) and re.match(folder_pattern, name)
+    def restore(self, session: tf.Session):
         model_filtrator = lambda path, name: os.path.isfile(path + "/" + name) and re.match(model_pattern, name)
-        if not model_path:
-            folder_path = self.newest(self.save_path, folder_filtrator)
-            model_path = self.newest(folder_path, model_filtrator)
-            matched = re.match(model_pattern, model_path.split("/")[-1])
-            self._create_time = matched.groups()[0]
-            model_path = ".".join(model_path.split(".")[:-1])
+        model_path = newest(self.save_path, model_filtrator)
+        model_path = ".".join(model_path.split(".")[:-1])
         self.saver.restore(session, model_path)

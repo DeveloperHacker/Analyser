@@ -112,8 +112,7 @@ class Statistic:
 @trace("PREPARE DATA-SET")
 def prepare_data_set():
     statistic = Statistic()
-    with Timer("LOADING"):
-        methods = dumpers.json_load(ANALYSER_RAW_DATA_SET)
+    methods = prepares.load(ANALYSER_RAW_DATA_SET)
     methods = prepares.java_doc(methods)
     methods = prepares.contract(methods)
     methods = statistic.accountant("number").considers(methods)

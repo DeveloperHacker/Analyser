@@ -11,6 +11,7 @@ from seq2seq.Net import Net
 from seq2seq.analyser_rnn import *
 from seq2seq.misc import *
 from utils.Formatter import Formatter
+from utils.Score import BatchScore
 from utils.SummaryWriter import SummaryWriter
 from utils.wrappers import trace, Timer
 
@@ -18,7 +19,7 @@ from utils.wrappers import trace, Timer
 class AnalyserNet(Net):
     @trace("BUILD NET")
     def __init__(self, data_set):
-        super().__init__("Analyser", ANALYSER)
+        super().__init__(ANALYSER)
         num_words = len(Embeddings.words())
         num_tokens = len(Embeddings.tokens())
         with tf.variable_scope("Input"), Timer("BUILD INPUT"):
@@ -32,7 +33,7 @@ class AnalyserNet(Net):
             self.strings_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None, None], "strings_target")
             self.W_strings = tf.placeholder(tf.float32, [BATCH_SIZE, None, None, 1, 1], "W_strings")
             self.B_strings = tf.placeholder(tf.float32, [BATCH_SIZE, None, None, None, num_words], "B_strings")
-        with tf.variable_scope(self.name), Timer("BUILD BODY"):
+        with tf.variable_scope("Analyser"), Timer("BUILD BODY"):
             input_cell = (GRUCell(INPUTS_STATE_SIZE), GRUCell(INPUTS_STATE_SIZE))
             tree_output_cell = GRUCell(TREE_OUTPUT_STATE_SIZE)
             string_output_cell = GRUCell(STRING_OUTPUT_STATE_SIZE)
@@ -47,7 +48,6 @@ class AnalyserNet(Net):
                 string_output_cell, attention_states, states, self.string_length, num_words)
             self.scope = vs.get_variable_scope().name
         with tf.variable_scope("Output"), Timer("BUILD OUTPUT"):
-            self.top_tokens = tf.nn.top_k(self.raw_tokens, TOP)
             self.tokens = tf.argmax(self.raw_tokens, 3)
             self.strings = tf.argmax(self.raw_strings, 4)
         with tf.variable_scope("Loss"), Timer("BUILD LOSS"):
@@ -129,7 +129,7 @@ class AnalyserNet(Net):
         heads = ("epoch", "time", "F1", "loss", "F1", "loss")
         formats = ("d", ".4f", ".4f", ".4f", ".4f", ".4f")
         formatter = Formatter(heads, formats, (9, 20, 20, 20, 21, 21), range(6), 10)
-        figure = ProxyFigure("train", self.folder_path + "/train.png")
+        figure = ProxyFigure("train", self.save_path + "/train.png")
         validation_loss_graph = figure.curve(2, 1, 1, mode="-r")
         train_loss_graph = figure.curve(2, 1, 1, mode="-b")
         smoothed_train_f1_graph = figure.smoothed_curve(2, 1, 2, 0.64, mode="-b")
@@ -146,6 +146,7 @@ class AnalyserNet(Net):
         writer = SummaryWriter(ANALYSER_SUMMARIES, session, self.summaries)
         with session, device, writer, figure:
             session.run(tf.global_variables_initializer())
+            best_loss = float("inf")
             for epoch in range(TRAIN_EPOCHS):
                 train_set, validation_set, test_set = self.data_set
                 start = time.time()
@@ -187,14 +188,16 @@ class AnalyserNet(Net):
                 figure.draw()
                 figure.save()
                 writer.update()
-                self.save(session)
+                if best_loss > validation_loss:
+                    best_loss = validation_loss
+                    self.save(session)
 
     @trace("TEST NET")
     def test(self, model_path: str = None):
-        heads = ("F1", "tokens loss", "strings loss", "target", *(["output", "prob"] * TOP))
-        formats = (*([".4f"] * 3), "s", *(["s", ".4f"] * TOP))
-        sizes = (*([15] * 3), *([13] * (1 + 2 * TOP)))
-        formatter = Formatter(heads, formats, sizes, range(4 + 2 * TOP))
+        heads = ("F1", "tokens loss", "strings loss")
+        formats = (".4f", ".4f", ".4f")
+        sizes = (20, 50, 50)
+        formatter = Formatter(heads, formats, sizes, range(3))
         heads = ("label", "text")
         formats = ("s", "s")
         sizes = (formatter.row_size(0), formatter.size - formatter.row_size(0) - 3)
@@ -211,13 +214,12 @@ class AnalyserNet(Net):
                 feed_dict = self.build_feed_dict(batch)
                 raw_tokens = session.run(self.raw_tokens, feed_dict)
                 feed_dict = self.correct_target(feed_dict, raw_tokens)
-                fetches = (self.top_tokens, self.raw_tokens, self.tokens, self.tokens_loss)
-                top_tokens, raw_tokens, tokens, tokens_loss = session.run(fetches, feed_dict)
+                fetches = (self.raw_tokens, self.tokens, self.tokens_loss)
+                raw_tokens, tokens, tokens_loss = session.run(fetches, feed_dict)
                 fetches = (self.attention, self.strings, self.strings_loss)
                 attention, strings, strings_loss = session.run(fetches, feed_dict)
                 inputs = feed_dict[self.inputs]
                 num_conditions = feed_dict[self.num_conditions]
-                num_tokens = feed_dict[self.num_tokens]
                 tokens_targets = feed_dict[self.tokens_targets]
                 strings_targets = feed_dict[self.strings_targets]
                 attention = transpose_attention(attention)
@@ -226,16 +228,11 @@ class AnalyserNet(Net):
                     scores.append(_score)
                     formatter.print_head()
                     for j in range(num_conditions):
-                        for k in range(num_tokens):
-                            token_target = tokens_targets[i][j][k]
-                            top_tokens_indices = top_tokens.indices[i][j][k]
-                            top_tokens_probabilities = top_tokens.values[i][j][k]
-                            token_target = Embeddings.tokens().get_name(token_target)
-                            top_tokens_indices = (Embeddings.tokens().get_name(i) for i in top_tokens_indices)
-                            outputs = itertools.chain(*zip(top_tokens_indices, top_tokens_probabilities))
-                            formatter.print(_score.F_score(1), tokens_loss[i], strings_loss[i], token_target, *outputs)
+                        formatter.print(_score.F_score(1), tokens_loss[i], strings_loss[i])
                         formatter0.print_delimiter()
                         print_strings(formatter0, tokens[i][j], strings[i][j], strings_targets[i][j])
+                        formatter0.print_delimiter()
+                        print_strings(formatter0, tokens_targets[i][j], strings_targets[i][j], strings_targets[i][j])
                         formatter0.print_delimiter()
                         print_raw_tokens(formatter0, raw_tokens[i][j])
                         formatter1.print_delimiter()

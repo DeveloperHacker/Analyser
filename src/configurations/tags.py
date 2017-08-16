@@ -5,7 +5,9 @@ THROW = "@throw"
 SEE = "@see"
 SIGNATURE = "@signature"
 
-PARTS = (HEAD, PARAMETER, RETURN, THROW, SEE, SIGNATURE)
+PARTS = (HEAD, PARAMETER, RETURN, THROW, SEE,
+         # SIGNATURE
+         )
 
 STRING = "@string"
 NUMBER = "@number"

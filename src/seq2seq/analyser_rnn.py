@@ -24,7 +24,7 @@ def sequence_input(cell_fw, cell_bw, inputs, inputs_length, hidden_size):
         input_size = inputs.get_shape()[2].value
 
         bias_initializer = init_ops.constant_initializer(0)
-        with vs.variable_scope("OutputProjectionVariables"):
+        with vs.variable_scope("InputProjectionVariables"):
             W = vs.get_variable(_WEIGHTS_NAME, [input_size, hidden_size])
             B = vs.get_variable(_BIAS_NAME, [hidden_size], initializer=bias_initializer)
         inputs = array_ops.reshape(inputs, [batch_size * input_length, input_size])

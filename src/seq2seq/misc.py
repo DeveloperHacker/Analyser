@@ -1,13 +1,15 @@
 import enum
 import itertools
 import re
-from typing import Iterable, Any, List, Union
+from typing import Iterable, Any, List
 
 import numpy as np
 import tensorflow as tf
 
 from configurations.tags import NOP, NEXT, PAD
 from seq2seq import Embeddings
+from utils.Score import Score, BatchScore
+from utils.Style import Styles
 from utils.wrappers import static
 
 
@@ -101,91 +103,6 @@ def nearest_correct(targets, outputs, fine_weigh):
     result_strings = np.asarray(result_strings)
     result_strings_mask = np.asarray(result_strings_mask)
     return result_tokens, result_strings, result_strings_mask
-
-
-EPSILON = 1e-10
-
-
-class Score:
-    def __init__(self, TP, TN, FP, FN):
-        self.TP = TP
-        self.TN = TN
-        self.FP = FP
-        self.FN = FN
-        self.Ps = self.TP + self.FP
-        self.Ns = self.TN + self.FN
-        self.T = self.TP + self.TN
-        self.F = self.FP + self.FN
-        self.P = self.TP + self.FN
-        self.N = self.TN + self.FP
-        self.ALL = self.P + self.N
-        self.TPR = self.TP / (self.P + EPSILON)
-        self.TNR = self.TN / (self.N + EPSILON)
-        self.PPV = self.TP / (self.Ps + EPSILON)
-        self.NPV = self.TN / (self.Ns + EPSILON)
-        self.FNR = 1 - self.TPR
-        self.FPR = 1 - self.TNR
-        self.FDR = 1 - self.PPV
-        self.FOR = 1 - self.NPV
-        self.ACC = self.T / self.ALL
-        self.MCC = (self.TP * self.TN - self.FP * self.FN) / (np.sqrt(self.Ps * self.P * self.N * self.Ns) + EPSILON)
-        self.BM = self.TPR + self.TNR - 1
-        self.MK = self.PPV + self.NPV - 1
-        self.recall = self.TPR
-        self.precision = self.PPV
-        self.accuracy = self.ACC
-        self.true_positive = self.TP
-        self.true_negative = self.TN
-        self.false_negative = self.FN
-        self.false_positive = self.FP
-
-    def F_score(self, beta):
-        beta = beta * beta
-        return (1 + beta) * self.PPV * self.TPR / (beta * self.PPV + self.TPR + EPSILON)
-
-    def E_score(self, alpha):
-        return 1 - self.PPV * self.TPR / (alpha * self.TPR + (1 - alpha) * self.PPV + EPSILON)
-
-
-class BatchScore:
-    def __init__(self, scores: List[Score]):
-        self.scores = scores
-        self.TP = np.mean([score.TP / score.ALL for score in scores])
-        self.TN = np.mean([score.TN / score.ALL for score in scores])
-        self.FP = np.mean([score.FP / score.ALL for score in scores])
-        self.FN = np.mean([score.FN / score.ALL for score in scores])
-        self.Ps = self.TP + self.FP
-        self.Ns = self.TN + self.FN
-        self.T = self.TP + self.TN
-        self.F = self.FP + self.FN
-        self.P = self.TP + self.FN
-        self.N = self.TN + self.FP
-        self.ALL = self.P + self.N
-        self.TPR = np.mean([score.TPR for score in scores])
-        self.TNR = np.mean([score.TNR for score in scores])
-        self.PPV = np.mean([score.PPV for score in scores])
-        self.NPV = np.mean([score.NPV for score in scores])
-        self.FNR = np.mean([score.FNR for score in scores])
-        self.FPR = np.mean([score.FPR for score in scores])
-        self.FDR = np.mean([score.FDR for score in scores])
-        self.FOR = np.mean([score.FOR for score in scores])
-        self.ACC = np.mean([score.ACC for score in scores])
-        self.MCC = np.mean([score.MCC for score in scores])
-        self.BM = np.mean([score.BM for score in scores])
-        self.MK = np.mean([score.MK for score in scores])
-        self.recall = self.TPR
-        self.precision = self.PPV
-        self.accuracy = self.ACC
-        self.true_positive = self.TP
-        self.true_negative = self.TN
-        self.false_negative = self.FN
-        self.false_positive = self.FP
-
-    def F_score(self, beta):
-        return np.mean([score.F_score(beta) for score in self.scores])
-
-    def E_score(self, alpha):
-        return np.mean([score.E_score(alpha) for score in self.scores])
 
 
 def score(targets, outputs):
@@ -285,83 +202,6 @@ def cut(string: str, text_size: int, align: Align):
     return lines
 
 
-class Style:
-    _byte = "\33[{}m"
-
-    def __init__(self, *styles: Union['Style', str, int]):
-        self._instance = "%s"
-        for style in styles:
-            if isinstance(style, Style):
-                style = style._instance
-            else:
-                style = Style._byte.format(style) + "%s"
-            self._instance %= style
-
-    def flatten(self) -> str:
-        acc_style = "%s"
-        for style in self._instance:
-            acc_style %= style
-        return style
-
-    def apply(self, string: str) -> str:
-        return self._instance % string + Style._byte.format(0)
-
-    def __mod__(self, other) -> Union[str, 'Style']:
-        if isinstance(other, Style):
-            return Style(self, other)
-        if isinstance(other, str):
-            return self.apply(other)
-        return NotImplemented
-
-
-class Styles:
-    empty = Style(0)
-    bold = Style(1)
-    dim = Style(2)
-    underlined = Style(4)
-    blink = Style(5)
-    reverse = Style(7)
-    hidden = Style(8)
-
-    class background:
-        default = Style(49)
-        black = Style(40)
-        red = Style(41)
-        green = Style(42)
-        yellow = Style(43)
-        blue = Style(44)
-        magenta = Style(45)
-        cyan = Style(46)
-        gray = Style(100)
-        light_gray = Style(47)
-        light_red = Style(101)
-        light_green = Style(102)
-        light_yellow = Style(103)
-        light_blue = Style(104)
-        light_magenta = Style(105)
-        light_cyan = Style(106)
-        white = Style(107)
-
-    class foreground:
-        default = Style(39)
-        black = Style(30)
-        red = Style(31)
-        green = Style(32)
-        yellow = Style(33)
-        blue = Style(34)
-        magenta = Style(35)
-        cyan = Style(36)
-        gray = Style(90)
-        light_gray = Style(37)
-        light_red = Style(91)
-        light_green = Style(92)
-        light_yellow = Style(93)
-        light_blue = Style(94)
-        light_magenta = Style(95)
-        light_cyan = Style(96)
-        white = Style(97)
-
-
 def print_doc(formatter, indexed_doc, words_weighs):
     STYLES = (Styles.foreground.gray,
               Styles.bold % Styles.foreground.cyan,
@@ -407,9 +247,6 @@ def print_doc(formatter, indexed_doc, words_weighs):
                 result.append(word)
         yield result
 
-    text_size = formatter.size - 2
-    for line in cut(legend(), text_size, Align.center):
-        formatter.print(line)
     for weighs in words_weighs:
         maximum = np.max(weighs)
         minimum = np.min(weighs)
@@ -419,7 +256,7 @@ def print_doc(formatter, indexed_doc, words_weighs):
         formatter.print(text.format(mean, variance, minimum, maximum))
         words = (Embeddings.words().get_name(index) for index in indexed_doc)
         # weighs = top_k_normalization(6, weighs)
-        # weighs = normalization(weighs)
+        weighs = normalization(weighs)
         colorized = []
         for word, weigh in zip(words, weighs):
             style = STYLES[-1]
@@ -431,7 +268,7 @@ def print_doc(formatter, indexed_doc, words_weighs):
         for text in split(colorized, NEXT, PAD):
             if len(text) == 0:
                 continue
-            for line in cut(" ".join(text), text_size, Align.left):
+            for line in cut(" ".join(text), formatter.size - 2, Align.left):
                 formatter.print(line)
 
 
@@ -452,7 +289,7 @@ def print_raw_tokens(formatter, raw_tokens):
 def print_strings(formatter, tokens, strings, strings_targets):
     for token, string, target in zip(tokens, strings, strings_targets):
         token = Embeddings.tokens().get_name(token)
-        string = (Embeddings.words().get_name(word) for word in string)
+        string = (Embeddings.words().get_name(index) if index >= 0 else " " for index in string)
         color = lambda skip: Styles.foreground.gray if skip else Styles.bold
         string = (color(index == -1) % word for word, index in zip(string, target))
         for line in cut(" ".join(string), formatter.row_size(-1), Align.left):

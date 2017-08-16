@@ -4,36 +4,34 @@ from live_plotter.proxy.ProxyFigure import ProxyFigure
 from utils.wrappers import Timer
 
 
-def run_map(cycles: int) -> float:
-    xs = range(cycles)
-    timer = Timer("MAP")
+def run_multiply(length: int) -> float:
+    timer = Timer("MULTIPLY")
     timer.start()
-    max(map(lambda x: x + 2, xs))
+    max([2] * length)
     timer.stop()
     return timer.delay() * 1e3
 
 
-def run_list(cycles: int) -> float:
-    xs = range(cycles)
-    timer = Timer("LIST")
+def run_generate(length: int) -> float:
+    timer = Timer("GENERATE")
     timer.start()
-    max([x + 2 for x in xs])
+    max([2 for _ in range(length)])
     timer.stop()
     return timer.delay() * 1e3
 
 
-def main(start, stop, number, test_cycles):
+def main(start, stop, experiments, cycles):
     with ProxyFigure(save_path="test.png") as figure:
-        map_curve = figure.curve(1, 1, 1, "-r")
-        list_curve = figure.curve(1, 1, 1, "-b")
+        multiply_curve = figure.curve(1, 1, 1, "-r")
+        generate_curve = figure.curve(1, 1, 1, "-b")
         figure.set_x_label(1, 1, 1, "cycles")
         figure.set_y_label(1, 1, 1, "t, ms")
-        for cycles in np.linspace(start, stop, number):
-            cycles = int(cycles)
-            y_map = np.mean([run_map(cycles) for _ in range(test_cycles)])
-            y_list = np.mean([run_list(cycles) for _ in range(test_cycles)])
-            map_curve.append(cycles, y_map)
-            list_curve.append(cycles, y_list)
+        for length in np.linspace(start, stop, experiments):
+            length = int(length)
+            y_multiply = np.mean([run_multiply(length) for _ in range(cycles)])
+            y_generate = np.mean([run_generate(length) for _ in range(cycles)])
+            multiply_curve.append(length, y_multiply)
+            generate_curve.append(length, y_generate)
             figure.draw()
             figure.save()
 

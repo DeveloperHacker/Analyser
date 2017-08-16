@@ -38,20 +38,20 @@ class Embeddings:
 
     def get_store(self, key):
         if key is None:
-            raise ValueError
+            raise ValueError("Store with 'None' key is not supported")
         if isinstance(key, (int, np.number)):
             index = int(key)
             if index < 0 or index >= len(self.instance):
-                raise Exception("Store with index '%d' hasn't found" % key)
+                raise ValueError("Store with index '%d' hasn't found" % key)
         elif isinstance(key, str):
             if key in self.name2idx:
                 index = self.name2idx[key]
             elif self.default_name is not None:
                 index = self.name2idx[self.default_name]
             else:
-                raise Exception("Store with name '%s' hasn't found" % key)
+                raise ValueError("Store with name '%s' hasn't found" % key)
         else:
-            raise Exception("Key with type %s hasn't supported" % type(key))
+            raise ValueError("Key with type %s hasn't supported" % type(key))
         return index, self.idx2name[index], self.idx2emb[index]
 
     def get_index(self, key) -> int:

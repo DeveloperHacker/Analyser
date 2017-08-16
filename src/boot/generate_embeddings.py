@@ -11,7 +11,7 @@ from word2vec import word2vec_optimized as word2vec
 
 @trace("PREPARE DATA-SET")
 def prepare_data_set():
-    methods = dumpers.json_load(FULL_DATA_SET)
+    methods = prepares.load(FULL_DATA_SET)
     methods = prepares.java_doc(methods)
     docs = (method[JAVA_DOC] for method in methods)
     with open(FILTERED, "w") as file:
@@ -36,17 +36,17 @@ def train():
         model.saver.save(session, GENERATOR_MODEL)
         emb = model.w_in.eval(session)
         embeddings = {word.decode("utf8", errors='replace'): emb[i] for word, i in model.word2id.items()}
-    dumpers.pkl_dump(embeddings, EMBEDDINGS)
+    return embeddings
 
 
 @trace("TEST")
-def cluster():
-    embeddings = dumpers.pkl_load(EMBEDDINGS)
+def cluster(embeddings):
     clusters = generators.classifiers.kneighbors(embeddings, 0.1)
     generators.show.kneighbors(clusters)
 
 
 if __name__ == '__main__':
     prepare_data_set()
-    train()
-    cluster()
+    embeddings = train()
+    dumpers.pkl_dump(embeddings, EMBEDDINGS)
+    cluster(embeddings)

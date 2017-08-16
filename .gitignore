@@ -90,4 +90,3 @@ ENV/
 .idea/
 !/seq2seq/q_function_net.py
 resources
-src/boot/playground.py

@@ -1,4 +1,5 @@
 import itertools
+import json
 import random
 import re
 from multiprocessing.pool import Pool
@@ -15,7 +16,7 @@ from contracts.TreeVisitor import TreeVisitor, TreeGuide
 from contracts.Validator import is_param, Validator
 from pyparsing import ParseException
 
-from configurations.constants import OUTPUT_TYPE, BATCH_SIZE, MAX_PARAM
+from configurations.constants import BATCH_SIZE, MAX_PARAM, FILLING, FLATTEN_TYPE
 from configurations.fields import CONTRACT, JAVA_DOC, DESCRIPTION
 from configurations.logger import info_logger
 from configurations.tags import PAD, NOP, NEXT, PARTS, SIGNATURE, PARAMETER
@@ -32,12 +33,14 @@ def convert(token: Token) -> str:
             return Tokens.LOWER
         if token.name == Tokens.GREATER:
             return Tokens.LOWER_OR_EQUAL
+        return token.name
     if token.type == Types.MARKER:
         name = token.name
-        if is_param(name) and int(name[len(Tokens.PARAM) + 1:-1]) > MAX_PARAM:
-            name = Tokens.PARAM
+        index = name[len(Tokens.PARAM) + 1:-1]
+        if is_param(name) and int(index) > MAX_PARAM:
+            return Tokens.PARAM
         return name
-    raise Exception("Token '%s' is not convertible" % str(token))
+    return None
 
 
 def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[str]]]]:
@@ -87,15 +90,17 @@ def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[
             self.strings[index] = string
 
         def visit_node_end(self, depth: int, node: Node, parent: Node):
-            self.tokens.append(convert(node.token))
+            token = convert(node.token)
+            if token is not None:
+                self.tokens.append(token)
 
     Validator().accept(tree)
     equalizer = Equalizer()
     tree = equalizer.accept(tree)
     forest = [Tree(child.children[0]) for child in tree.root.children]
-    if OUTPUT_TYPE in ("tree", "bfs_sequence"):
+    if FLATTEN_TYPE == "bfs":
         compiler = Compiler(BfsGuide())
-    elif OUTPUT_TYPE == "dfs_sequence":
+    if FLATTEN_TYPE == "dfs":
         compiler = Compiler(DfsGuide())
     result = [compiler.accept(tree) for tree in forest]
     return result
@@ -113,9 +118,9 @@ def convert_from(contract: List[Tuple[List[str], List[List[str]]]]) -> Tree:
             names.append(token)
 
     tokens = Decompiler.typing(names)
-    if OUTPUT_TYPE in ("tree", "bfs_sequence"):
+    if FLATTEN_TYPE == "bfs":
         tree = Decompiler.bfs(tokens)
-    elif OUTPUT_TYPE == "dfs_sequence":
+    if FLATTEN_TYPE == "dfs":
         tree = Decompiler.dfs(tokens)
     return tree
 
@@ -286,25 +291,6 @@ def parse_contract(method):
     return method
 
 
-def index_contract(method):
-    tree = method[CONTRACT]
-    tokens, strings = convert_to(tree)
-    result = [
-        ([Embeddings.tokens().get_index(token) for token in tokens[i]],
-         {idx: [Embeddings.words().get_index(word) for word in string] for idx, string in strings[i].items()})
-        for i in range(len(tokens))
-    ]
-    method[CONTRACT] = result
-    return method
-
-
-def index_java_doc(method):
-    java_doc = (word.strip() for word in method[JAVA_DOC].split(" "))
-    java_doc = tuple(Embeddings.words().get_index(word) for word in java_doc)
-    method[JAVA_DOC] = java_doc
-    return method
-
-
 def build_batch(methods: List[dict]):
     pad = Embeddings.words().get_index(PAD)
     nop = Embeddings.tokens().get_index(NOP)
@@ -322,14 +308,21 @@ def build_batch(methods: List[dict]):
     contracts = [method[CONTRACT] for method in methods]
     height = max(contract.height() for contract in contracts)
     num_conditions = max(len(contract.root.children) for contract in contracts)
-    contracts = [convert_to(contract, height) for contract in contracts]
+    contracts = [convert_to(contract, height if FILLING else 0) for contract in contracts]
     height -= 2
     sequence_length = 2 ** height - 1
+
+    strings_lengths = (len(string)
+                       for contract in contracts
+                       for tokens, strings in contract
+                       for string in strings.values())
+    string_length1 = max(strings_lengths, default=0) + 1
 
     chain = itertools.chain
     mapper = lambda x: x[1].values()
     lengths = chain((0,), map(len, chain(*map(mapper, chain(*contracts)))))
     string_length = max(lengths) + 1
+    assert string_length1 == string_length
 
     strings = []
     tokens = []
@@ -342,7 +335,7 @@ def build_batch(methods: List[dict]):
             for idx, raw_string in raw_strings.items():
                 raw_string = [Embeddings.words().get_index(word) for word in raw_string]
                 _strings[i][idx][:len(raw_string)] = raw_string
-                _strings[i][idx][len(raw_string)] = pad
+                _strings[i][idx][len(raw_string):] = [pad] * (string_length - len(raw_string))
         strings.append(_strings)
         tokens.append(_tokens)
     tokens = np.asarray(tokens)
@@ -354,8 +347,16 @@ def build_batch(methods: List[dict]):
     return inputs, outputs, parameters
 
 
+@trace("LOAD METHODS")
+def load(path: str) -> Iterable[dict]:
+    with open(path) as file:
+        strings = (line for line in file if not line.strip().startswith("//"))
+        methods = json.loads("\n".join(strings))
+    return methods
+
+
 @trace("PREPARE JAVA-DOC")
-def java_doc(methods) -> List[dict]:
+def java_doc(methods) -> Iterable[dict]:
     with Pool() as pool:
         methods = (method for method in methods if not empty(method))
         methods = pool.map(append_param_delimiter, methods)
@@ -364,17 +365,17 @@ def java_doc(methods) -> List[dict]:
         methods = pool.map(apply_anonymizers, methods)
         methods = (method for method in methods if not empty(method))
         methods = pool.map(one_line_doc, methods)
-    return list(methods)
+    return methods
 
 
 @trace("PREPARE CONTRACT")
-def contract(methods) -> List[dict]:
+def contract(methods) -> Iterable[dict]:
     with Pool() as pool:
         methods = pool.map(parse_contract, methods)
         methods = (method for method in methods if method[CONTRACT].height() > 1)
         methods = pool.map(standardify_contract, methods)
         methods = pool.map(filter_contract_text, methods)
-    return list(methods)
+    return methods
 
 
 @trace("PREPARE BATCHES")
