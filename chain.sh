@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 PYTHONPATH="src/"
-python src/boot/generate_embeddings.py
-python src/boot/main.py
+python src/word2vec_main.py
+python src/analyser_main.py --prepare=true --train=true --test=true

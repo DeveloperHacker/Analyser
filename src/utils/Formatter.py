@@ -1,7 +1,6 @@
-import logging
 from typing import Iterable
 
-from configurations.logger import TABLE_LOGGER
+from logger import logger
 
 
 class Formatter:
@@ -19,14 +18,14 @@ class Formatter:
                  heads: Iterable[str],
                  formats: Iterable[str],
                  sizes: Iterable[int],
-                 rows: Iterable[int],
+                 rows: Iterable[int] = None,
                  height: int = None):
         self._row = 0
         self._height = height
         self._heads = list(heads)
         self._formats = list(formats)
         self._sizes = list(sizes)
-        self._rows = list(rows)
+        self._rows = list(rows or range(len(self._sizes)))
         head_segments = []
         line_segments = []
         delimiter_segments = []
@@ -43,14 +42,7 @@ class Formatter:
         # self._upper_delimiter = self.LUBVD + self.HD.join(delimiter_segments) + self.RUBVD
         # self._lower_delimiter = self.LLBVD + self.HD.join(delimiter_segments) + self.RLBVD
         self._head = self._head.format(segments=self._heads)
-
-    @staticmethod
-    def _raw_print(text: str):
-        logging.getLogger(TABLE_LOGGER).info(text)
-
-    @staticmethod
-    def raw_print(text: str):
-        Formatter._raw_print(Formatter.BVD + " " + text)
+        self.raw_print = logger.info
 
     def print(self, *args):
         if self._height and self._row % self._height == 0:
@@ -60,7 +52,7 @@ class Formatter:
                 self.print_upper_delimiter()
             self.print_head_text()
             self.print_delimiter()
-        self._raw_print(self._line.format(segments=list(args)))
+        self.raw_print(self._line.format(segments=list(args)))
         self._row += 1
 
     def print_head(self):
@@ -69,18 +61,18 @@ class Formatter:
         self.print_delimiter()
 
     def print_delimiter(self):
-        self._raw_print(self._delimiter)
+        self.raw_print(self._delimiter)
 
     def print_upper_delimiter(self):
-        self._raw_print(self._upper_delimiter)
+        self.raw_print(self._upper_delimiter)
         self._row = 0
 
     def print_lower_delimiter(self):
-        self._raw_print(self._lower_delimiter)
+        self.raw_print(self._lower_delimiter)
         self._row = 0
 
     def print_head_text(self):
-        self._raw_print(self._head)
+        self.raw_print(self._head)
 
     @property
     def height(self):

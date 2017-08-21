@@ -3,14 +3,13 @@ from typing import List, Dict, Tuple
 import numpy as np
 from contracts import Tokens, Types
 
-from configurations.constants import EMBEDDING_SIZE
-from configurations.paths import EMBEDDINGS
-from configurations.tags import *
+from contants import *
 from utils import dumpers
 from utils.wrappers import memoize
-
-
 # ToDo: thread save
+from contants import EMBEDDINGS_PATH
+
+
 class Embeddings:
     def __init__(self, instance: List[Tuple[str, np.array]], default_name: str = None):
         self._instance = instance
@@ -39,6 +38,7 @@ class Embeddings:
     def get_store(self, key):
         if key is None:
             raise ValueError("Store with 'None' key is not supported")
+        # noinspection PyUnresolvedReferences
         if isinstance(key, (int, np.number)):
             index = int(key)
             if index < 0 or index >= len(self.instance):
@@ -69,9 +69,10 @@ class Embeddings:
 
 @memoize.function
 def words() -> Embeddings:
-    instance = dumpers.pkl_load(EMBEDDINGS)
-    instance[GO] = np.ones([EMBEDDING_SIZE], np.float32)
-    instance[PAD] = np.zeros([EMBEDDING_SIZE], np.float32)
+    instance = dumpers.pkl_load(EMBEDDINGS_PATH)
+    embedding_size = max(len(embedding) for embedding in instance.values())
+    instance[GO] = np.ones([embedding_size], np.float32)
+    instance[PAD] = np.zeros([embedding_size], np.float32)
     instance = list(instance.items())
     instance.sort(key=lambda x: x[0])
     return Embeddings(instance, "UNK")

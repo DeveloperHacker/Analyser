@@ -1,7 +1,7 @@
 import collections
 import time
 
-from configurations.logger import timing_logger
+from logger import logger
 
 
 def expand_time(clock: float):
@@ -75,7 +75,7 @@ class Timer:
 
     def __enter__(self):
         self.start()
-        timing_logger.info("process '%s' is started" % self.name)
+        logger.info("process '%s' is started" % self.name)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -83,7 +83,7 @@ class Timer:
         expanded = expand_time(self.delay())
         formatted = format_time(*expanded)
         formatter = "process '{}' worked for '{}'"
-        timing_logger.info(formatter.format(self.name, formatted))
+        logger.info(formatter.format(self.name, formatted))
 
 
 class memoize:
@@ -98,7 +98,7 @@ class memoize:
             return getattr(self, attr_name)
 
         @_property.setter
-        def _property(self, value):
+        def _property(*_):
             raise AttributeError
 
         return _property

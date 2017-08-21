@@ -1,4 +1,4 @@
-from typing import List
+from typing import Iterable
 
 import numpy as np
 
@@ -6,7 +6,7 @@ EPSILON = 1e-10
 
 
 class Score:
-    def __init__(self, TP, TN, FP, FN):
+    def __init__(self, TP: int, TN: int, FP: int, FN: int):
         self.TP = TP
         self.TN = TN
         self.FP = FP
@@ -47,43 +47,27 @@ class Score:
     def E_score(self, alpha):
         return 1 - self.PPV * self.TPR / (alpha * self.TPR + (1 - alpha) * self.PPV + EPSILON)
 
+    def tuple(self):
+        return self.TP, self.TN, self.FP, self.FN
 
-class BatchScore:
-    def __init__(self, scores: List[Score]):
-        self.scores = scores
-        self.TP = np.mean([score.TP / score.ALL for score in scores])
-        self.TN = np.mean([score.TN / score.ALL for score in scores])
-        self.FP = np.mean([score.FP / score.ALL for score in scores])
-        self.FN = np.mean([score.FN / score.ALL for score in scores])
-        self.Ps = self.TP + self.FP
-        self.Ns = self.TN + self.FN
-        self.T = self.TP + self.TN
-        self.F = self.FP + self.FN
-        self.P = self.TP + self.FN
-        self.N = self.TN + self.FP
-        self.ALL = self.P + self.N
-        self.TPR = np.mean([score.TPR for score in scores])
-        self.TNR = np.mean([score.TNR for score in scores])
-        self.PPV = np.mean([score.PPV for score in scores])
-        self.NPV = np.mean([score.NPV for score in scores])
-        self.FNR = np.mean([score.FNR for score in scores])
-        self.FPR = np.mean([score.FPR for score in scores])
-        self.FDR = np.mean([score.FDR for score in scores])
-        self.FOR = np.mean([score.FOR for score in scores])
-        self.ACC = np.mean([score.ACC for score in scores])
-        self.MCC = np.mean([score.MCC for score in scores])
-        self.BM = np.mean([score.BM for score in scores])
-        self.MK = np.mean([score.MK for score in scores])
-        self.recall = self.TPR
-        self.precision = self.PPV
-        self.accuracy = self.ACC
-        self.true_positive = self.TP
-        self.true_negative = self.TN
-        self.false_negative = self.FN
-        self.false_positive = self.FP
 
-    def F_score(self, beta):
-        return np.mean([score.F_score(beta) for score in self.scores])
+def build(tp, tn, fp, fn) -> Score:
+    return Score(tp, tn, fp, fn)
 
-    def E_score(self, alpha):
-        return np.mean([score.E_score(alpha) for score in self.scores])
+
+def calc(target, output, ignore, pad):
+    target = np.asarray(target)
+    output = np.asarray(output)
+    tn = np.count_nonzero(np.logical_and(target == pad, output == pad))
+    tp = np.count_nonzero(np.logical_and(np.logical_and(target == output, output != pad), target != pad))
+    fp = np.count_nonzero(np.logical_and(np.logical_and(output != target, output != pad), target != ignore))
+    fn = np.count_nonzero(np.logical_and(np.logical_and(output != target, target != pad), target != ignore))
+    return Score(tp, tn, fp, fn)
+
+
+def concat(scores: Iterable[Score]) -> Score:
+    tp = sum(score.TP for score in scores)
+    tn = sum(score.TN for score in scores)
+    fp = sum(score.FP for score in scores)
+    fn = sum(score.FN for score in scores)
+    return Score(tp, tn, fp, fn)

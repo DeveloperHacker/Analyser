@@ -1,73 +1,138 @@
+import os
 import random
+import re
 import time
+from collections import namedtuple
 
+import numpy as np
+import tensorflow as tf
 from live_plotter.proxy.ProxyFigure import ProxyFigure
 from tensorflow.python.ops.rnn_cell_impl import GRUCell
 
-from configurations.constants import *
-from configurations.logger import info_logger
-from configurations.paths import ANALYSER, ANALYSER_SUMMARIES
-from seq2seq.Net import Net
-from seq2seq.analyser_rnn import *
-from seq2seq.misc import *
+from analyser import Embeddings
+from analyser.analyser_rnn import *
+from analyser.misc import cross_entropy_loss, l2_loss, greedy_correct, transpose_attention, calc_scores, print_diff, \
+    print_scores, newest
+from contants import PAD, NOP
+from logger import logger
+from utils import Score, dumpers
 from utils.Formatter import Formatter
-from utils.Score import BatchScore
 from utils.SummaryWriter import SummaryWriter
 from utils.wrappers import trace, Timer
 
+flags = tf.app.flags
 
-class AnalyserNet(Net):
+flags.DEFINE_integer('epochs', None, '')
+flags.DEFINE_integer('batch_size', None, '')
+flags.DEFINE_integer('input_state_size', None, '')
+flags.DEFINE_integer('input_hidden_size', None, '')
+flags.DEFINE_integer('token_state_size', None, '')
+flags.DEFINE_integer('string_state_size', None, '')
+flags.DEFINE_float('l2_weight', None, '')
+
+flags.DEFINE_integer('minimum_length', None, '')
+flags.DEFINE_float('train_set', None, '')
+flags.DEFINE_float('validation_set', None, '')
+flags.DEFINE_float('test_set', None, '')
+
+flags.DEFINE_string('model_dir', None, '')
+flags.DEFINE_string('data_set_path', None, '')
+flags.DEFINE_string('summaries_dir', None, '')
+
+FLAGS = flags.FLAGS
+
+DataSet = namedtuple("DataSet", ("train", "validation", "test"))
+
+
+class AnalyserNet:
     @trace("BUILD NET")
-    def __init__(self, data_set):
-        super().__init__(ANALYSER)
+    def __init__(self):
         num_words = len(Embeddings.words())
         num_tokens = len(Embeddings.tokens())
+        nop = Embeddings.tokens().get_index(NOP)
+        pad = Embeddings.words().get_index(PAD)
         with tf.variable_scope("Input"), Timer("BUILD INPUT"):
-            self.inputs = tf.placeholder(tf.int32, [BATCH_SIZE, None], "inputs")
-            self.inputs_length = tf.placeholder(tf.int32, [BATCH_SIZE], "inputs_length")
-            self.num_conditions = tf.placeholder(tf.int32, [], "num_conditions")
+            self.inputs = tf.placeholder(tf.int32, [FLAGS.batch_size, None], "inputs")
+            self.inputs_length = tf.placeholder(tf.int32, [FLAGS.batch_size], "inputs_length")
+            self.output_length = tf.placeholder(tf.int32, [], "output_length")
             self.string_length = tf.placeholder(tf.int32, [], "string_length")
-            self.tree_height = tf.placeholder(tf.int32, [], "depth")
-            self.num_tokens = tf.placeholder(tf.int32, [], "num_tokens")
-            self.tokens_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None], "outputs_targets")
-            self.strings_targets = tf.placeholder(tf.int32, [BATCH_SIZE, None, None, None], "strings_target")
-            self.W_strings = tf.placeholder(tf.float32, [BATCH_SIZE, None, None, 1, 1], "W_strings")
-            self.B_strings = tf.placeholder(tf.float32, [BATCH_SIZE, None, None, None, num_words], "B_strings")
-        with tf.variable_scope("Analyser"), Timer("BUILD BODY"):
-            input_cell = (GRUCell(INPUTS_STATE_SIZE), GRUCell(INPUTS_STATE_SIZE))
-            tree_output_cell = GRUCell(TREE_OUTPUT_STATE_SIZE)
-            string_output_cell = GRUCell(STRING_OUTPUT_STATE_SIZE)
-            _embeddings = tf.gather(tf.constant(np.asarray(Embeddings.words().idx2emb)), self.inputs)
-            attention_states = sequence_input(*input_cell, _embeddings, self.inputs_length, INPUT_HIDDEN_SIZE)
-            if OUTPUT_TYPE == "tree":
-                self.tokens_logits, self.raw_tokens, states, self.attention = tree_output(
-                    tree_output_cell, attention_states, self.num_conditions, self.tree_height, num_tokens)
-            else:
-                raise ValueError("Output type '%s' hasn't expected" % OUTPUT_TYPE)
+            self.token_length = tf.placeholder(tf.int32, [], "token_length")
+        with tf.variable_scope("Analyser") as scope, Timer("BUILD BODY"):
+            input_cell = (GRUCell(FLAGS.input_state_size), GRUCell(FLAGS.input_state_size))
+            tree_output_cell = GRUCell(FLAGS.token_state_size)
+            string_output_cell = GRUCell(FLAGS.string_state_size)
+            input = tf.gather(tf.constant(np.asarray(Embeddings.words().idx2emb)), self.inputs)
+            attention_states = sequence_input(*input_cell, input, self.inputs_length, FLAGS.input_hidden_size)
+            self.tokens_logits, self.raw_tokens, states, self.attention = tree_output(
+                tree_output_cell, attention_states, self.output_length, self.token_length, num_tokens)
             self.strings_logits, self.raw_strings = string_output(
                 string_output_cell, attention_states, states, self.string_length, num_words)
-            self.scope = vs.get_variable_scope().name
+            self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope.name)
         with tf.variable_scope("Output"), Timer("BUILD OUTPUT"):
             self.tokens = tf.argmax(self.raw_tokens, 3)
             self.strings = tf.argmax(self.raw_strings, 4)
         with tf.variable_scope("Loss"), Timer("BUILD LOSS"):
-            nop = Embeddings.tokens().get_index(NOP)
-            pad = Embeddings.words().get_index(PAD)
+            self.tokens_targets = tf.placeholder(tf.int32, [FLAGS.batch_size, None, None], "tokens")
+            self.strings_targets = tf.placeholder(tf.int32, [FLAGS.batch_size, None, None, None], "strings")
             self.tokens_loss = cross_entropy_loss(self.tokens_targets, self.tokens_logits, nop)
             self.strings_loss = cross_entropy_loss(self.strings_targets, self.strings_logits, pad)
-            self.l2_loss = L2_LOSS_WEIGHT * l2_loss(self.variables)
+            self.l2_loss = FLAGS.l2_weight * l2_loss(self.variables)
             self.loss = self.tokens_loss + self.strings_loss + self.l2_loss
         with tf.variable_scope("Optimizer"), Timer("BUILD OPTIMISER"):
             self.optimizer = tf.train.AdamOptimizer().minimize(self.loss)
         with tf.variable_scope("Summaries"), Timer("BUILD SUMMARIES"):
             self.summaries = self.add_variable_summaries()
-            self._data_set = data_set
+        self.saver = tf.train.Saver(var_list=self.variables)
+        self.save_path = FLAGS.model_dir
+
+    def save(self, session: tf.Session):
+        if not os.path.isdir(self.save_path):
+            os.mkdir(self.save_path)
+        save_time = time.strftime("%d-%m-%Y-%H-%M-%S")
+        model_path = os.path.join(self.save_path, "model-%s.ckpt" % save_time)
+        self.saver.save(session, model_path)
+
+    def restore(self, session: tf.Session):
+        save_path = self.save_path
+        model_pattern = re.compile(r"model-\d{1,2}-\d{1,2}-\d{4}-\d{1,2}-\d{1,2}-\d{1,2}\.ckpt\.meta")
+        filtrator = lambda path, name: os.path.isfile(path + "/" + name) and re.match(model_pattern, name)
+        model_path = newest(save_path, filtrator)
+        model_path = ".".join(model_path.split(".")[:-1])
+        self.saver.restore(session, model_path)
+
+    @staticmethod
+    def get_data_set() -> DataSet:
+        data_set = dumpers.pkl_load(FLAGS.data_set_path)
+        data_set_length = len(data_set)
+        not_allocated = data_set_length
+        test_set_length = min(not_allocated, int(data_set_length * FLAGS.test_set))
+        not_allocated -= test_set_length
+        train_set_length = min(not_allocated, int(data_set_length * FLAGS.train_set))
+        not_allocated -= train_set_length
+        validation_set_length = min(not_allocated, int(data_set_length * FLAGS.validation_set))
+        not_allocated -= validation_set_length
+        if test_set_length < FLAGS.minimum_length:
+            args = (test_set_length, FLAGS.minimum_length)
+            raise ValueError("Length of the test set is very small, length = %d < %d" % args)
+        if train_set_length < FLAGS.minimum_length:
+            args = (train_set_length, FLAGS.minimum_length)
+            raise ValueError("Length of the train set is very small, length = %d < %d" % args)
+        if validation_set_length < FLAGS.minimum_length:
+            args = (validation_set_length, FLAGS.minimum_length)
+            raise ValueError("Length of the validation set is very small, length = %d < %d" % args)
+        test_set = data_set[-test_set_length:]
+        data_set = data_set[:-test_set_length]
+        random.shuffle(data_set)
+        train_set = data_set[-train_set_length:]
+        data_set = data_set[:-train_set_length]
+        validation_set = data_set[-validation_set_length:]
+        return DataSet(train_set, validation_set, test_set)
 
     def add_variable_summaries(self):
         variables = [tf.reshape(variable, [-1]) for variable in self.variables]
         tf.summary.histogram("Summary", tf.concat(variables, 0))
         for variable in self.variables:
-            tf.summary.histogram(variable.name, variable)
+            tf.summary.histogram(variable.name.replace(":", "_"), variable)
         return tf.summary.merge_all()
 
     def build_feed_dict(self, batch) -> dict:
@@ -77,41 +142,12 @@ class AnalyserNet(Net):
         num_conditions, num_tokens, string_length, tree_depth = parameters
         feed_dict = {self.inputs: inputs,
                      self.inputs_length: inputs_length,
-                     self.num_conditions: num_conditions,
-                     self.num_tokens: num_tokens,
+                     self.output_length: num_conditions,
                      self.string_length: string_length,
-                     self.tree_height: tree_depth,
+                     self.token_length: tree_depth,
                      self.tokens_targets: tokens,
                      self.strings_targets: strings}
         return feed_dict
-
-    @property
-    def data_set(self) -> (list, list, list):
-        data_set = list(self._data_set)
-        data_set_length = len(data_set)
-        not_allocated = data_set_length
-        test_set_length = min(not_allocated, int(data_set_length * TEST_SET))
-        not_allocated -= test_set_length
-        train_set_length = min(not_allocated, int(data_set_length * TRAIN_SET))
-        not_allocated -= train_set_length
-        validation_set_length = min(not_allocated, int(data_set_length * VALIDATION_SET))
-        not_allocated -= validation_set_length
-        if test_set_length < MINIMUM_DATA_SET_LENGTH:
-            args = (test_set_length, MINIMUM_DATA_SET_LENGTH)
-            raise ValueError("Length of the test set is very small, length = %d < %d" % args)
-        if train_set_length < MINIMUM_DATA_SET_LENGTH:
-            args = (train_set_length, MINIMUM_DATA_SET_LENGTH)
-            raise ValueError("Length of the train set is very small, length = %d < %d" % args)
-        if validation_set_length < MINIMUM_DATA_SET_LENGTH:
-            args = (validation_set_length, MINIMUM_DATA_SET_LENGTH)
-            raise ValueError("Length of the validation set is very small, length = %d < %d" % args)
-        test_set = data_set[-test_set_length:]
-        data_set = data_set[:-test_set_length]
-        random.shuffle(data_set)
-        train_set = data_set[-train_set_length:]
-        data_set = data_set[:-train_set_length]
-        validation_set = data_set[-validation_set_length:]
-        return train_set, validation_set, test_set
 
     def correct_target(self, feed_dict, outputs) -> dict:
         targets = feed_dict[self.tokens_targets]
@@ -124,11 +160,11 @@ class AnalyserNet(Net):
         feed_dict[self.strings_targets] = strings_targets
         return feed_dict
 
-    @trace("TRAIN NET")
     def train(self):
+        nop = Embeddings.tokens().get_index(NOP)
         heads = ("epoch", "time", "F1", "loss", "F1", "loss")
         formats = ("d", ".4f", ".4f", ".4f", ".4f", ".4f")
-        formatter = Formatter(heads, formats, (9, 20, 20, 20, 21, 21), range(6), 10)
+        formatter = Formatter(heads, formats, (9, 20, 20, 20, 21, 21), height=10)
         figure = ProxyFigure("train", self.save_path + "/train.png")
         validation_loss_graph = figure.curve(2, 1, 1, mode="-r")
         train_loss_graph = figure.curve(2, 1, 1, mode="-b")
@@ -143,33 +179,35 @@ class AnalyserNet(Net):
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         session = tf.Session(config=config)
         device = tf.device('/cpu:0')
-        writer = SummaryWriter(ANALYSER_SUMMARIES, session, self.summaries)
+        writer = SummaryWriter(FLAGS.summaries_dir, session, self.summaries)
         with session, device, writer, figure:
             session.run(tf.global_variables_initializer())
             best_loss = float("inf")
-            for epoch in range(TRAIN_EPOCHS):
-                train_set, validation_set, test_set = self.data_set
+            for epoch in range(FLAGS.epochs):
+                data_set = self.get_data_set()
                 start = time.time()
-                for batch in train_set:
+                for batch in data_set.train:
                     feed_dict = self.build_feed_dict(batch)
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     session.run(self.optimizer, feed_dict)
                 trains_loss, train_scores = [], []
-                for batch in train_set:
+                for batch in data_set.train:
                     feed_dict = self.build_feed_dict(batch)
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    train_scores.append(batch_score(feed_dict[self.tokens_targets], tokens))
+                    score = Score.calc(feed_dict[self.tokens_targets], tokens, -1, nop)
+                    train_scores.append(score)
                     trains_loss.append(loss)
                 validations_loss, validation_scores = [], []
-                for batch in validation_set:
+                for batch in data_set.validation:
                     feed_dict = self.build_feed_dict(batch)
                     raw_tokens = session.run(self.raw_tokens, feed_dict)
                     feed_dict = self.correct_target(feed_dict, raw_tokens)
                     tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    validation_scores.append(batch_score(feed_dict[self.tokens_targets], tokens))
+                    score = Score.calc(feed_dict[self.tokens_targets], tokens, -1, nop)
+                    validation_scores.append(score)
                     validations_loss.append(loss)
                 stop = time.time()
                 delay = stop - start
@@ -183,34 +221,24 @@ class AnalyserNet(Net):
                 smoothed_validation_f1_graph.append(epoch, validation_score)
                 formatter.print(epoch, delay, train_score, train_loss, validation_score, validation_loss)
                 if np.isnan(train_loss) or np.isnan(validation_loss):
-                    info_logger.info("NaN detected")
+                    logger.info("NaN detected")
                     break
-                figure.draw()
-                figure.save()
-                writer.update()
                 if best_loss > validation_loss:
                     best_loss = validation_loss
                     self.save(session)
+                figure.draw()
+                figure.save()
+                writer.update()
+        return best_loss
 
-    @trace("TEST NET")
-    def test(self, model_path: str = None):
-        heads = ("F1", "tokens loss", "strings loss")
-        formats = (".4f", ".4f", ".4f")
-        sizes = (20, 50, 50)
-        formatter = Formatter(heads, formats, sizes, range(3))
-        heads = ("label", "text")
-        formats = ("s", "s")
-        sizes = (formatter.row_size(0), formatter.size - formatter.row_size(0) - 3)
-        formatter0 = Formatter(heads, formats, sizes, (0, 1))
-        formatter1 = Formatter(["text"], ["s"], [formatter.size - 2], [0])
+    def test(self) -> (Score, Score, Score, Score):
         config = tf.ConfigProto()
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         with tf.Session(config=config) as session, tf.device('/cpu:0'):
             session.run(tf.global_variables_initializer())
-            self.restore(session, model_path)
-            train_set, validation_set, test_set = self.data_set
+            self.restore(session)
             scores = []
-            for batch in test_set:
+            for batch in self.get_data_set().test:
                 feed_dict = self.build_feed_dict(batch)
                 raw_tokens = session.run(self.raw_tokens, feed_dict)
                 feed_dict = self.correct_target(feed_dict, raw_tokens)
@@ -219,27 +247,11 @@ class AnalyserNet(Net):
                 fetches = (self.attention, self.strings, self.strings_loss)
                 attention, strings, strings_loss = session.run(fetches, feed_dict)
                 inputs = feed_dict[self.inputs]
-                num_conditions = feed_dict[self.num_conditions]
                 tokens_targets = feed_dict[self.tokens_targets]
                 strings_targets = feed_dict[self.strings_targets]
                 attention = transpose_attention(attention)
-                for i in range(BATCH_SIZE):
-                    _score = score(tokens_targets[i], tokens[i])
-                    scores.append(_score)
-                    formatter.print_head()
-                    for j in range(num_conditions):
-                        formatter.print(_score.F_score(1), tokens_loss[i], strings_loss[i])
-                        formatter0.print_delimiter()
-                        print_strings(formatter0, tokens[i][j], strings[i][j], strings_targets[i][j])
-                        formatter0.print_delimiter()
-                        print_strings(formatter0, tokens_targets[i][j], strings_targets[i][j], strings_targets[i][j])
-                        formatter0.print_delimiter()
-                        print_raw_tokens(formatter0, raw_tokens[i][j])
-                        formatter1.print_delimiter()
-                        print_doc(formatter1, inputs[i], attention[i][j])
-                        if j < num_conditions - 1:
-                            formatter1.print_delimiter()
-                        else:
-                            formatter1.print_lower_delimiter()
-            _score = BatchScore(scores)
-            info_logger.info("F1 = %.4f" % _score.F_score(1))
+                scores.append(calc_scores(tokens_targets, tokens, strings_targets, strings))
+                print_diff(inputs, attention, raw_tokens, tokens_targets, tokens, strings_targets, strings)
+            logger.error(self.save_path)
+            scores = print_scores(scores)
+        return scores

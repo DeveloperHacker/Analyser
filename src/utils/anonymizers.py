@@ -1,6 +1,6 @@
 import re
 
-from configurations.tags import *
+from contants import *
 
 
 def anonymize_quoted_strings(string: str) -> str:
@@ -69,6 +69,7 @@ def expand_html_escapes(string: str) -> str:
 
 
 def anonymize_links(string: str) -> str:
+    # noinspection Annotator,Annotator
     return re.sub("(\{@|@\{).*?\}", " %s " % LINK, string)
 
 

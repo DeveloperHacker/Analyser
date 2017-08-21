@@ -4,7 +4,7 @@ from multiprocessing.pool import Pool
 import numpy as np
 from sklearn.cluster import KMeans as _KMeans
 
-from configurations.logger import info_logger
+from logger import logger
 
 
 def maximum(_, tar_value, data):
@@ -50,7 +50,7 @@ class show:
             num_clusters = len(clusters)
         clusters = list(reversed(sorted(clusters, key=lambda cluster: len(cluster))))
         for i in range(0, round(num_clusters)):
-            info_logger.info(clusters[i])
+            logger.info(clusters[i])
 
     @staticmethod
     def kneighbors(clusters: list, num_clusters=None):
@@ -58,6 +58,6 @@ class show:
             num_clusters = len(clusters)
         clusters.sort(key=lambda target: len(target.data), reverse=True)
         for i in range(0, round(num_clusters)):
-            info_logger.info("\"%s\":" % clusters[i].label)
+            logger.info("\"%s\":" % clusters[i].label)
             for label, distance in clusters[i].data.items():
-                info_logger.info("\t%.3f: \"%s\"" % (distance, label))
+                logger.info("\t%.3f: \"%s\"" % (distance, label))

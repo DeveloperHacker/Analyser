@@ -6,9 +6,9 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import tensor_array_ops as ta_ops
 from tensorflow.python.ops import variable_scope as vs
 
-from seq2seq import dynamic_rnn
-from seq2seq.dynamic_rnn import attention_dynamic_rnn
-from seq2seq.dynamic_rnn import bidirectional_dynamic_rnn
+from analyser import dynamic_rnn
+from analyser.dynamic_rnn import attention_dynamic_rnn
+from analyser.dynamic_rnn import bidirectional_dynamic_rnn
 
 # noinspection PyProtectedMember
 _WEIGHTS_NAME = dynamic_rnn._WEIGHTS_NAME

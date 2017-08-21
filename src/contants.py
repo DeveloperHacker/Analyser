@@ -5,9 +5,7 @@ THROW = "@throw"
 SEE = "@see"
 SIGNATURE = "@signature"
 
-PARTS = (HEAD, PARAMETER, RETURN, THROW, SEE,
-         # SIGNATURE
-         )
+PARTS = (HEAD, PARAMETER, RETURN, THROW, SEE, SIGNATURE)
 
 STRING = "@string"
 NUMBER = "@number"
@@ -32,3 +30,9 @@ PARAM_4 = "param[4]"
 PARAM_5 = "param[5]"
 
 TAGS = PARTS + (STRING, NUMBER, HTML_BEGIN, HTML_END, HTML_BLOCK, LINK, PATH, URL, GO, PAD, NOP, NEXT)
+
+CONTRACT = "contract"
+JAVA_DOC = "java-doc"
+DESCRIPTION = "description"
+
+EMBEDDINGS_PATH = 'resources/word2vec/embeddings.pickle'
