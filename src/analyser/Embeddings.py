@@ -4,10 +4,10 @@ import numpy as np
 from contracts import Tokens, Types
 
 from contants import *
-from utils import dumpers
-from utils.wrappers import memoize
 # ToDo: thread save
 from contants import EMBEDDINGS_PATH
+from utils import dumpers
+from utils.wrappers import memoize
 
 
 class Embeddings:
@@ -82,6 +82,14 @@ def words() -> Embeddings:
 def tokens() -> Embeddings:
     names = Tokens.instances[Types.OPERATOR] + Tokens.instances[Types.MARKER]
     names += (NOP, PARAM_0, PARAM_1, PARAM_2, PARAM_3, PARAM_4, PARAM_5, Types.STRING)
+    embeddings = list(np.eye(len(names)))
+    instance = list(zip(names, embeddings))
+    return Embeddings(instance)
+
+
+@memoize.function
+def labels() -> Embeddings:
+    names = Tokens.instances[Types.LABEL] + (UNDEFINED,)
     embeddings = list(np.eye(len(names)))
     instance = list(zip(names, embeddings))
     return Embeddings(instance)

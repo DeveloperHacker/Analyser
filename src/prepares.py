@@ -14,7 +14,7 @@ from contracts.TreeVisitor import TreeVisitor, TreeGuide
 from contracts.Validator import is_param, Validator
 
 from analyser import Embeddings
-from contants import PAD, NOP, NEXT, PARTS, SIGNATURE, PARAMETER, CONTRACT, JAVA_DOC, DESCRIPTION
+from contants import PAD, NOP, NEXT, PARTS, SIGNATURE, PARAMETER, CONTRACT, JAVA_DOC, DESCRIPTION, UNDEFINED
 from utils import anonymizers
 from utils.wrappers import static
 
@@ -36,70 +36,81 @@ def convert(token: Token) -> Token:
         if is_param(name) and int(index) > MAX_PARAM:
             return Token(Tokens.PARAM, Types.MARKER)
         return Token(name, Types.MARKER)
+    if token.type == Types.LABEL:
+        return token
     return None
 
 
+@static(trees={1: Node(Token(NOP, Types.MARKER))})
+def empty_tree(height: int) -> Node:
+    assert height > 0
+    if height not in empty_tree.trees:
+        node = empty_tree(height - 1)
+        token = empty_tree.trees[1].token
+        node = Node(token, node, node)
+        empty_tree.trees[height] = node
+    return empty_tree.trees[height]
+
+
+class Equalizer(TreeVisitor):
+    def __init__(self, height: int):
+        super().__init__(DfsGuide())
+        self.tree = None
+        self.height = height
+
+    def result(self) -> Tree:
+        return self.tree
+
+    def visit_tree(self, tree: Tree):
+        self.tree = tree
+
+    def visit_node_end(self, depth: int, node: Node, parent: Node):
+        diff = self.height - depth
+        if node.leaf() and diff > 0:
+            node.children.append(empty_tree(diff))
+            node.children.append(empty_tree(diff))
+
+
+class Compiler(TreeVisitor):
+    def __init__(self, guide: TreeGuide):
+        super().__init__(guide)
+        self.label = None
+        self.tokens = None
+        self.strings = None
+
+    def result(self) -> Tuple[List[str], Dict[int, List[str]]]:
+        return self.label, self.tokens, self.strings
+
+    def visit_tree(self, tree: Tree):
+        self.label = UNDEFINED
+        self.tokens = []
+        self.strings = {}
+
+    def visit_label(self, depth: int, node: Node, parent: Node):
+        self.label = node.token.name
+
+    def visit_string(self, depth: int, node: Node, parent: Node):
+        index = len(self.tokens)
+        string = node.token.name[1:-1].split()
+        self.strings[index] = string
+
+    def visit_node_end(self, depth: int, node: Node, parent: Node):
+        token = convert(node.token)
+        if token is not None and token.type != Types.LABEL:
+            self.tokens.append(token.name)
+
+
 def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[str]]]]:
-    @static(trees={1: Node(Token(NOP, Types.MARKER))})
-    def empty(height: int) -> Node:
-        assert height > 0
-        if height not in empty.trees:
-            node = empty(height - 1)
-            token = empty.trees[1].token
-            node = Node(token, node, node)
-            empty.trees[height] = node
-        return empty.trees[height]
-
-    class Equalizer(TreeVisitor):
-        def __init__(self):
-            super().__init__(DfsGuide())
-            self.tree = None
-
-        def result(self) -> Tree:
-            return self.tree
-
-        def visit_tree(self, tree: Tree):
-            self.tree = tree
-
-        def visit_node_end(self, depth: int, node: Node, parent: Node):
-            diff = height - depth
-            if node.leaf() and diff > 0:
-                node.children.append(empty(diff))
-                node.children.append(empty(diff))
-
-    class Compiler(TreeVisitor):
-        def __init__(self, guide: TreeGuide):
-            super().__init__(guide)
-            self.tokens = None
-            self.strings = None
-
-        def result(self) -> Tuple[List[str], Dict[int, List[str]]]:
-            return self.tokens, self.strings
-
-        def visit_tree(self, tree: Tree):
-            self.tokens = []
-            self.strings = {}
-
-        def visit_string(self, depth: int, node: Node, parent: Node):
-            index = len(self.tokens)
-            string = node.token.name[1:-1].split()
-            self.strings[index] = string
-
-        def visit_node_end(self, depth: int, node: Node, parent: Node):
-            token = convert(node.token)
-            if token is not None:
-                self.tokens.append(token.name)
-
     Validator().accept(tree)
-    equalizer = Equalizer()
+    equalizer = Equalizer(height)
     tree = equalizer.accept(tree)
-    forest = [Tree(child.children[0]) for child in tree.root.children]
+    forest = [Tree(child) for child in tree.root.children]
     compiler = Compiler(BfsGuide())
     result = [compiler.accept(tree) for tree in forest]
     return result
 
 
-def empty(method):
+def is_empty(method):
     for label, text in method[JAVA_DOC].items():
         if len(text) > 0:
             return False
@@ -146,63 +157,67 @@ def one_line_doc(method):
     return method
 
 
-def standardify_contract(method):
-    class Mapper(TreeVisitor):
-        def __init__(self, map_function):
-            super().__init__(DfsGuide())
-            self.map = map_function
+class Mapper(TreeVisitor):
+    def __init__(self, map_function):
+        super().__init__(DfsGuide())
+        self.map = map_function
 
-        def visit_node_end(self, depth: int, node: Node, parent: Node):
-            children = [self.map(child, node) for child in node.children]
-            node.children = children
+    def visit_node_end(self, depth: int, node: Node, parent: Node):
+        children = [self.map(child, node) for child in node.children]
+        node.children = children
 
-    def swap(node: Node, _: Node) -> Node:
-        comparators = (Tokens.GREATER, Tokens.GREATER_OR_EQUAL)
-        if node.token.type == Types.OPERATOR and node.token.name in comparators:
+
+def swap(node: Node, _: Node) -> Node:
+    comparators = (Tokens.GREATER, Tokens.GREATER_OR_EQUAL)
+    if node.token.type == Types.OPERATOR and node.token.name in comparators:
+        node.children = node.children[::-1]
+        node.token = convert(node.token)
+    return node
+
+
+def reduce(node: Node, _: Node) -> Node:
+    if node.token.name == Tokens.NOT_EQUAL:
+        assert node.children is not None
+        assert len(node.children) == 2
+        left = node.children[0]
+        right = node.children[1]
+        if left.token.name == Tokens.FALSE:
+            node = right
+        elif right.token.name == Tokens.FALSE:
+            node = left
+        elif left.token.name == Tokens.TRUE:
+            node.token = Token(Tokens.EQUAL, Types.OPERATOR)
+            left.token = Token(Tokens.FALSE, Types.MARKER)
+            node.children = [right, left]
+        elif right.token.name == Tokens.TRUE:
+            node.token = Token(Tokens.EQUAL, Types.OPERATOR)
+            right.token = Token(Tokens.FALSE, Types.MARKER)
+    if node.token.name == Tokens.EQUAL:
+        assert node.children is not None
+        assert len(node.children) == 2
+        left = node.children[0]
+        right = node.children[1]
+        if left.token.name == Tokens.TRUE:
+            node = right
+        elif right.token.name == Tokens.TRUE:
+            node = left
+        elif left.token.name == Tokens.FALSE:
             node.children = node.children[::-1]
-            node.token = convert(node.token)
-        return node
+    return node
 
-    def reduce(node: Node, _: Node) -> Node:
-        if node.token.name == Tokens.NOT_EQUAL:
-            assert node.children is not None
-            assert len(node.children) == 2
-            left = node.children[0]
-            right = node.children[1]
-            if left.token.name == Tokens.FALSE:
-                node = right
-            elif right.token.name == Tokens.FALSE:
-                node = left
-            elif left.token.name == Tokens.TRUE:
-                node.token = Token(Tokens.EQUAL, Types.OPERATOR)
-                left.token = Token(Tokens.FALSE, Types.MARKER)
-                node.children = [right, left]
-            elif right.token.name == Tokens.TRUE:
-                node.token = Token(Tokens.EQUAL, Types.OPERATOR)
-                right.token = Token(Tokens.FALSE, Types.MARKER)
-        if node.token.name == Tokens.EQUAL:
-            assert node.children is not None
-            assert len(node.children) == 2
-            left = node.children[0]
-            right = node.children[1]
-            if left.token.name == Tokens.TRUE:
-                node = right
-            elif right.token.name == Tokens.TRUE:
-                node = left
-            elif left.token.name == Tokens.FALSE:
-                node.children = node.children[::-1]
-        return node
 
-    def expand(node: Node, parent: Node) -> Node:
-        cond = node.token.type == Types.MARKER and parent is not None
-        cond1 = cond and parent.token.name in (Tokens.FOLLOW, Tokens.AND, Tokens.OR)
-        cond2 = cond and parent.token.type == Types.LABEL
-        if cond1 or cond2:
-            token = Token(Tokens.EQUAL, Types.OPERATOR)
-            right = Node(Token(Tokens.TRUE, Types.OPERATOR))
-            node = Node(token, node, right)
-        return node
+def expand(node: Node, parent: Node) -> Node:
+    cond = node.token.type == Types.MARKER and parent is not None
+    cond1 = cond and parent.token.name in (Tokens.FOLLOW, Tokens.AND, Tokens.OR)
+    cond2 = cond and parent.token.type == Types.LABEL
+    if cond1 or cond2:
+        token = Token(Tokens.EQUAL, Types.OPERATOR)
+        right = Node(Token(Tokens.TRUE, Types.OPERATOR))
+        node = Node(token, node, right)
+    return node
 
+
+def standardify_contract(method):
     tree = method[CONTRACT]
     Validator().accept(tree)
     Mapper(swap).accept(tree)
@@ -255,6 +270,7 @@ def parse_contract(method):
 
 
 def build_batch(methods: List[dict]):
+    undefined = Embeddings.labels().get_index(UNDEFINED)
     pad = Embeddings.words().get_index(PAD)
     nop = Embeddings.tokens().get_index(NOP)
 
@@ -270,38 +286,42 @@ def build_batch(methods: List[dict]):
 
     contracts = [method[CONTRACT] for method in methods]
     height = max(contract.height() for contract in contracts)
-    num_conditions = max(len(contract.root.children) for contract in contracts)
+    labels_length = max(len(contract.root.children) for contract in contracts)
     contracts = [convert_to(contract, height) for contract in contracts]
     height -= 2
-    sequence_length = 2 ** height - 1
+    tokens_length = 2 ** height - 1
 
-    strings_lengths = (len(string)
-                       for contract in contracts
-                       for tokens, strings in contract
-                       for string in strings.values())
-    string_length = max(strings_lengths, default=0) + 1
+    strings_lengths = (
+        len(string)
+        for contract in contracts
+        for label, tokens, strings in contract
+        for string in strings.values())
+    strings_length = max(strings_lengths, default=0) + 1
 
-    strings = []
-    tokens = []
+    labels_targets, tokens_targets, strings_targets = [], [], []
     for contract in contracts:
-        _strings = np.tile(-1, [num_conditions, sequence_length, string_length])
-        _tokens = np.tile(nop, [num_conditions, sequence_length])
-        for i, (raw_tokens, raw_strings) in enumerate(contract):
+        strings = np.tile(-1, [labels_length, tokens_length, strings_length])
+        tokens = np.tile(nop, [labels_length, tokens_length])
+        labels = np.tile(undefined, [labels_length])
+        for i, (raw_label, raw_tokens, raw_strings) in enumerate(contract):
+            labels[i] = Embeddings.labels().get_index(raw_label)
             raw_tokens = [Embeddings.tokens().get_index(token) for token in raw_tokens]
-            _tokens[i][:len(raw_tokens)] = raw_tokens
+            tokens[i][:len(raw_tokens)] = raw_tokens
             for idx, raw_string in raw_strings.items():
                 raw_string = [Embeddings.words().get_index(word) for word in raw_string]
-                _strings[i][idx][:len(raw_string)] = raw_string
-                _strings[i][idx][len(raw_string):] = [pad] * (string_length - len(raw_string))
-        strings.append(_strings)
-        tokens.append(_tokens)
-    tokens = np.asarray(tokens)
-    strings = np.asarray(strings)
+                strings[i][idx][:len(raw_string)] = raw_string
+                strings[i][idx][len(raw_string):] = [pad] * (strings_length - len(raw_string))
+        labels_targets.append(labels)
+        tokens_targets.append(tokens)
+        strings_targets.append(strings)
+    labels_targets = np.asarray(labels_targets)
+    tokens_targets = np.asarray(tokens_targets)
+    strings_targets = np.asarray(strings_targets)
 
-    inputs = (inputs, inputs_length)
-    outputs = (tokens, strings)
-    parameters = (num_conditions, sequence_length, string_length, height)
-    return inputs, outputs, parameters
+    labels = labels_targets, labels_length
+    tokens = tokens_targets, tokens_length
+    strings = strings_targets, strings_length
+    return (inputs, inputs_length), labels, tokens, strings
 
 
 def load(path: str) -> Iterable[dict]:
@@ -312,12 +332,12 @@ def load(path: str) -> Iterable[dict]:
 
 
 def java_doc(methods) -> Iterable[dict]:
-    methods = (method for method in methods if not empty(method))
+    methods = (method for method in methods if not is_empty(method))
     methods = (append_param_delimiter(method) for method in methods)
     methods = (append_signature(method) for method in methods)
     methods = (join_java_doc(method) for method in methods)
     methods = (apply_anonymizers(method) for method in methods)
-    methods = (method for method in methods if not empty(method))
+    methods = (method for method in methods if not is_empty(method))
     methods = (one_line_doc(method) for method in methods)
     return methods
 

@@ -47,27 +47,36 @@ class Score:
     def E_score(self, alpha):
         return 1 - self.PPV * self.TPR / (alpha * self.TPR + (1 - alpha) * self.PPV + EPSILON)
 
-    def tuple(self):
-        return self.TP, self.TN, self.FP, self.FN
+    def serialize(self) -> dict:
+        json_object = {
+            "true_positive": self.TP,
+            "true_negative": self.TN,
+            "false_negative": self.FN,
+            "false_positive": self.FP}
+        return json_object
 
+    @staticmethod
+    def value_of(json_object: dict) -> 'Score':
+        tp = int(json_object["true_positive"])
+        tn = int(json_object["true_negative"])
+        fp = int(json_object["false_negative"])
+        fn = int(json_object["false_positive"])
+        return Score(tp, tn, fp, fn)
 
-def build(tp, tn, fp, fn) -> Score:
-    return Score(tp, tn, fp, fn)
+    @staticmethod
+    def calc(target, output, ignore, pad):
+        target = np.asarray(target)
+        output = np.asarray(output)
+        tn = np.count_nonzero(np.logical_and(target == pad, output == pad))
+        tp = np.count_nonzero(np.logical_and(np.logical_and(target == output, output != pad), target != pad))
+        fp = np.count_nonzero(np.logical_and(np.logical_and(output != target, output != pad), target != ignore))
+        fn = np.count_nonzero(np.logical_and(np.logical_and(output != target, target != pad), target != ignore))
+        return Score(tp, tn, fp, fn)
 
-
-def calc(target, output, ignore, pad):
-    target = np.asarray(target)
-    output = np.asarray(output)
-    tn = np.count_nonzero(np.logical_and(target == pad, output == pad))
-    tp = np.count_nonzero(np.logical_and(np.logical_and(target == output, output != pad), target != pad))
-    fp = np.count_nonzero(np.logical_and(np.logical_and(output != target, output != pad), target != ignore))
-    fn = np.count_nonzero(np.logical_and(np.logical_and(output != target, target != pad), target != ignore))
-    return Score(tp, tn, fp, fn)
-
-
-def concat(scores: Iterable[Score]) -> Score:
-    tp = sum(score.TP for score in scores)
-    tn = sum(score.TN for score in scores)
-    fp = sum(score.FP for score in scores)
-    fn = sum(score.FN for score in scores)
-    return Score(tp, tn, fp, fn)
+    @staticmethod
+    def concat(scores: Iterable['Score']) -> 'Score':
+        tp = sum(score.TP for score in scores)
+        tn = sum(score.TN for score in scores)
+        fp = sum(score.FP for score in scores)
+        fn = sum(score.FN for score in scores)
+        return Score(tp, tn, fp, fn)

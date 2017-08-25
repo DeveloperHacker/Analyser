@@ -1,13 +1,24 @@
-from utils import Score
+import numpy as np
 
-p = 7
-a = [[-1, -1, -1, -1], [1, 2, p, p], [-1, -1, -1, -1], [-1, -1, -1, -1], [1, 3, 6, p], [-1, -1, -1, -1]]
-b = [[+1, +5, +9, +8], [8, 2, p, 1], [+1, +2, +4, +2], [+3, +1, +2, +1], [1, 1, p, 2], [+2, +1, +p, +2]]
-sc = Score.calc(a, b, -1, p)
-print("ACC", sc.accuracy)
-print("F1", sc.F_score(1))
-print("J", sc.jaccard)
-print("TP", sc.true_positive)
-print("TN", sc.true_negative)
-print("FP", sc.false_positive)
-print("FN", sc.false_negative)
+from analyser.misc import greedy_correct, batch_greedy_correct
+
+targets = [[
+    [[1, 2, 3], [0, 0, 1], [2, 8, 7]],
+    [[1, 2, 3], [0, 0, 1], [2, 8, 7]],
+    [[1, 2, 3], [0, 0, 1], [2, 8, 7]]
+]]
+outputs = [[
+    [[3, 4, 5], [1, 2, 3], [1, 0, 2]],
+    [[3, 4, 5], [1, 2, 3], [1, 0, 2]],
+    [[3, 4, 5], [1, 2, 3], [1, 0, 2]]
+]]
+dependencies = [[
+    [[1, 2, 3], [0, 0, 0], [0, 2, 3]],
+    [[0, 5, 6], [3, 6, 4], [4, 5, 3]],
+    [[1, 8, 3], [1, 4, 5], [4, 5, 5]]
+]]
+targets, dependencies = batch_greedy_correct(targets, outputs, dependencies)
+print("targets")
+print(targets)
+print("dependencies")
+print(dependencies)

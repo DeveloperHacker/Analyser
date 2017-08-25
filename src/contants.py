@@ -17,6 +17,7 @@ LINK = "@link"
 PATH = "@path"
 URL = "@url"
 
+UNDEFINED = "@undefined"
 GO = "@go"
 PAD = "@pad"
 NOP = "@nop"

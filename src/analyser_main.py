@@ -7,6 +7,7 @@ from contracts.Compiler import DfsCompiler
 import prepares
 from analyser import Embeddings
 from analyser.AnalyserNet import AnalyserNet
+from analyser.Options import Options
 from contants import CONTRACT
 from logger import logger
 from utils import dumpers
@@ -32,7 +33,7 @@ class Counter:
 class Accountant:
     def __init__(self):
         self._methods_counter = Counter(0)
-        names = Embeddings.tokens().idx2name
+        names = Embeddings.tokens().idx2name + Embeddings.labels().idx2name
         self._token_counters = {name: Counter(0) for name in names}
 
     def considers(self, methods: Iterable[dict]) -> Iterable[dict]:
@@ -94,105 +95,106 @@ class Statistic:
 
 
 @trace("PREPARE DATA-SET")
-def prepare():
+def prepare(options: Options):
     statistic = Statistic()
-    methods = prepares.load(FLAGS.raw_data_set_path)
+    methods = prepares.load(RAW_DATA_SET_PATH)
     methods = prepares.java_doc(methods)
     methods = prepares.contract(methods)
     methods = statistic.accountant("number").considers(methods)
-    batches = prepares.batches(methods, FLAGS.batch_size)
+    batches = prepares.batches(methods, options.batch_size)
     batches = list(batches)
-    dumpers.pkl_dump(batches, FLAGS.data_set_path)
+    dumpers.pkl_dump(batches, options.data_set_path)
     logger.info("Number of batches: %d" % len(batches))
     statistic.show()
     return batches
 
 
 @trace("TRAIN")
-def train():
+def train(options: Options):
     tf.reset_default_graph()
-    net = AnalyserNet()
-    return net.train()
+    net = AnalyserNet(options)
+    net.train()
 
 
 @trace("TEST")
-def test():
+def test(options: Options):
     tf.reset_default_graph()
-    net = AnalyserNet()
+    net = AnalyserNet(options)
     return net.test()
+
+
+@trace("RANDOM")
+def random_options(options: Options):
+    results = dumpers.json_load(RESULTS_PATH)
+    used_options = [result["options"] for result in results]
+    while options.serialize() in used_options:
+        options.inputs_state_size = random.randint(1, 20) * 10
+        options.inputs_hidden_size = random.randint(1, 20) * 10
+        options.tokens_state_size = random.randint(1, 20) * 10
+        options.strings_state_size = random.randint(1, 20) * 10
+    names = ("inputs_state_size", "labels_state_size", "tokens_state_size", "strings_state_size")
+    sub = lambda x: tuple((name, x[name]) for name in names if name in x)
+    options.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % tuple(x[1] for x in sub(options.serialize()))
+
+
+@trace("STORE")
+def store(losses, scores, options: Options):
+    labels_loss, tokens_loss, strings_loss, loss = losses
+    labels_score, tokens_score, strings_score, templates_score, codes_score = scores
+    result = {
+        "options": options.serialize(),
+        "scores": {
+            "labels_loss": labels_loss,
+            "tokens_loss": tokens_loss,
+            "strings_loss": strings_loss,
+            "loss": loss,
+            "labels_score": tokens_score.serialize(),
+            "tokens_score": tokens_score.serialize(),
+            "strings_score": strings_score.serialize(),
+            "templates_score": templates_score.serialize(),
+            "codes_score": codes_score.serialize()
+        }
+    }
+    dumpers.json_print(result, logger.error)
+    results = dumpers.json_load(RESULTS_PATH)
+    results.append(result)
+    dumpers.json_dump(results, RESULTS_PATH)
 
 
 flags = tf.app.flags
 
 flags.DEFINE_bool('prepare', False, '')
-flags.DEFINE_bool('train', False, '')
-flags.DEFINE_bool('test', False, '')
 flags.DEFINE_bool('random', False, '')
+flags.DEFINE_bool('train', False, '')
 
-FLAGS = tf.app.flags.FLAGS
+FLAGS = flags.FLAGS
 
-FLAGS.minimum_length = 2
-FLAGS.train_set = 0.8
-FLAGS.validation_set = 0.1
-FLAGS.test_set = 0.1
-FLAGS.l2_weight = 0.001
-FLAGS.epochs = 100
-FLAGS.batch_size = 4
-FLAGS.input_state_size = 100
-FLAGS.input_hidden_size = 100
-FLAGS.token_state_size = 100
-FLAGS.string_state_size = 100
-params = (FLAGS.input_state_size, FLAGS.input_hidden_size, FLAGS.token_state_size, FLAGS.string_state_size)
-FLAGS.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % params
-FLAGS.summaries_dir = 'resources/analyser/summaries'
-FLAGS.data_set_path = 'resources/analyser/data-set.pickle'
-FLAGS.raw_data_set_path = 'resources/data-sets/joda-time.json'
-FLAGS.parameters_path = "resources/analyser/parameters.json"
-
-
-def train_with_random_params():
-    results = dumpers.json_load(FLAGS.parameters_path)
-    used_parameters = [result["parameters"] for result in results]
-    while True:
-        parameters = {
-            "input_state_size": random.randint(1, 10) * 10,
-            "input_hidden_size": random.randint(1, 50) * 10,
-            "token_state_size": random.randint(1, 50) * 10,
-            "string_state_size": random.randint(1, 50) * 10
-        }
-        if parameters not in used_parameters:
-            break
-    FLAGS.input_state_size = parameters["input_state_size"]
-    FLAGS.input_hidden_size = parameters["input_hidden_size"]
-    FLAGS.token_state_size = parameters["token_state_size"]
-    FLAGS.string_state_size = parameters["string_state_size"]
-    params = (FLAGS.input_state_size, FLAGS.input_hidden_size, FLAGS.token_state_size, FLAGS.string_state_size)
-    FLAGS.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % params
-    logger.error(str(parameters))
-    loss = train()
-    scores = test()
-    tokens_score, strings_score, templates_score, codes_score = scores
-    result = {
-        "parameters": parameters,
-        "scores": {
-            "loss": int(loss),
-            "tokens_score": [int(err) for err in tokens_score.tuple()],
-            "strings_score": [int(err) for err in strings_score.tuple()],
-            "templates_score": [int(err) for err in templates_score.tuple()],
-            "codes_score": [int(err) for err in codes_score.tuple()]
-        }
-    }
-    results.append(result)
-    dumpers.json_dump(results, FLAGS.parameters_path)
+RESULTS_PATH = "resources/analyser/results.json"
+RAW_DATA_SET_PATH = 'resources/data-sets/joda-time.json'
 
 
 def main():
-    if FLAGS.prepare: prepare()
-    if FLAGS.random:
-        train_with_random_params()
-        return
-    if FLAGS.train: train()
-    if FLAGS.test: test()
+    options = Options()
+    options.minimum_length = 2
+    options.train_set = 0.8
+    options.validation_set = 0.1
+    options.test_set = 0.1
+    options.l2_weight = 0.001
+    options.epochs = 100
+    options.batch_size = 4
+    options.summaries_dir = 'resources/analyser/summaries'
+    options.data_set_path = 'resources/analyser/data-set.pickle'
+    options.inputs_state_size = 40
+    options.labels_state_size = 40
+    options.tokens_state_size = 40
+    options.strings_state_size = 40
+    options.model_dir = 'resources/analyser/model-40-40-40-40'
+    if FLAGS.random: random_options(options)
+    dumpers.json_print(options.serialize(), logger.error)
+    if FLAGS.prepare: prepare(options)
+    if FLAGS.train: train(options)
+    losses, scores = test(options)
+    store(losses, scores, options)
 
 
 if __name__ == '__main__':

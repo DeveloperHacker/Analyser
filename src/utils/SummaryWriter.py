@@ -4,7 +4,7 @@ import tensorflow as tf
 class SummaryWriter(tf.summary.FileWriter):
     def __init__(self, log_dir, session, summaries,
                  graph=None, max_queue=10, flush_secs=120, graph_def=None, filename_suffix=None):
-        super(SummaryWriter, self).__init__(log_dir, graph, max_queue, flush_secs, graph_def, filename_suffix)
+        super().__init__(log_dir, graph, max_queue, flush_secs, graph_def, filename_suffix)
         self.session = session
         self.summaries = summaries
 

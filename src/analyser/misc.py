@@ -14,10 +14,10 @@ from contracts.Tree import Tree
 from contracts.TreeVisitor import TreeVisitor
 
 from analyser import Embeddings
-from contants import NEXT, PAD, NOP
+from analyser.Score import Score
+from contants import NEXT, PAD, NOP, UNDEFINED
 from logger import logger
 from prepares import MAX_PARAM
-from utils import Score
 from utils.Formatter import Formatter
 from utils.Style import Styles
 from utils.wrappers import static
@@ -46,43 +46,62 @@ def l2_loss(variables):
 
 
 def greedy_correct(targets, outputs, dependencies):
-    num_dependencies = len(dependencies)
-    batch_size = outputs.shape[0]
-    contract_size = outputs.shape[1]
-    tokens_targets_values = np.asarray(Embeddings.tokens().idx2emb)[targets]
-    result_tokens = []
-    result_dependencies = [[] for _ in range(num_dependencies)]
+    length = max(len(output) for output in outputs)
+    assert length == min(len(output) for output in outputs)
+    assert length == max(len(target) for target in targets)
+    assert length == min(len(target) for target in targets)
+    assert length == max(len(dependency) for dependency in dependencies)
+    assert length == min(len(dependency) for dependency in dependencies)
+    result_targets = [None] * length
+    result_dependencies = [None] * length
+    from_indexes = list(range(length))
+    to_indexes = list(range(length))
+    for _ in range(length):
+        index_best_from_index = None
+        index_best_to_index = None
+        best_distance = None
+        for i, from_index in enumerate(from_indexes):
+            for j, to_index in enumerate(to_indexes):
+                distance = 0
+                for target, output in zip(targets, outputs):
+                    from_target = np.asarray(target[from_index])
+                    to_output = np.asarray(output[to_index])
+                    distance += np.linalg.norm(from_target - to_output)
+                if best_distance is None or distance < best_distance:
+                    index_best_from_index = i
+                    index_best_to_index = j
+                    best_distance = distance
+        best_from_index = from_indexes[index_best_from_index]
+        best_to_index = to_indexes[index_best_to_index]
+        del from_indexes[index_best_from_index]
+        del to_indexes[index_best_to_index]
+        result_targets[best_to_index] = [target[best_from_index] for target in targets]
+        result_dependencies[best_to_index] = [dependency[best_from_index] for dependency in dependencies]
+    assert len(from_indexes) == 0
+    assert len(to_indexes) == 0
+    result_targets = [np.asarray(target) for target in zip(*result_targets)]
+    result_dependencies = [np.asarray(dependency) for dependency in zip(*result_dependencies)]
+    return result_targets, result_dependencies
+
+
+def batch_greedy_correct(targets, outputs, dependencies):
+    batch_size = max(len(output) for output in outputs)
+    assert batch_size == min(len(output) for output in outputs)
+    assert batch_size == max(len(target) for target in targets)
+    assert batch_size == min(len(target) for target in targets)
+    assert batch_size == max(len(dependency) for dependency in dependencies)
+    assert batch_size == min(len(dependency) for dependency in dependencies)
+    result_targets, result_dependencies = [], []
     for i in range(batch_size):
-        from_indexes = list(range(contract_size))
-        to_indexes = list(range(contract_size))
-        result_token = [None] * contract_size
-        _result_dependencies = [[None] * contract_size for _ in range(num_dependencies)]
-        while len(from_indexes) > 0:
-            index_best_from_index = None
-            index_best_to_index = None
-            best_distance = None
-            for j, from_index in enumerate(from_indexes):
-                for k, to_index in enumerate(to_indexes):
-                    from_output = tokens_targets_values[i][from_index]
-                    to_output = outputs[i][to_index]
-                    distance = np.linalg.norm(from_output - to_output)
-                    if best_distance is None or distance < best_distance:
-                        index_best_from_index = j
-                        index_best_to_index = k
-                        best_distance = distance
-            best_from_index = from_indexes[index_best_from_index]
-            best_to_index = to_indexes[index_best_to_index]
-            del from_indexes[index_best_from_index]
-            del to_indexes[index_best_to_index]
-            result_token[best_to_index] = targets[i][best_from_index]
-            for j in range(num_dependencies):
-                _result_dependencies[j][best_to_index] = dependencies[j][i][best_from_index]
-        result_tokens.append(result_token)
-        for j in range(num_dependencies):
-            result_dependencies[j].append(_result_dependencies[j])
-    result_tokens = np.asarray(result_tokens)
-    result_dependencies = [np.asarray(result_dependencies[i]) for i in range(num_dependencies)]
-    return result_tokens, result_dependencies
+        target = [target[i] for target in targets]
+        output = [output[i] for output in outputs]
+        dependency = [dependency[i] for dependency in dependencies]
+        target, dependency = greedy_correct(target, output, dependency)
+        result_targets.append(target)
+        result_dependencies.append(dependency)
+    result_targets = [np.asarray(target) for target in zip(*result_targets)]
+    result_dependencies = [np.asarray(dependency) for dependency in zip(*result_dependencies)]
+    return result_targets, result_dependencies
 
 
 def nearest_correct(targets, outputs, fine_weigh):
@@ -160,7 +179,7 @@ class Dropper(TreeVisitor):
         node.token = Token(Types.STRING, Types.STRING)
 
 
-def calc_scores(tokens_targets, tokens, strings_targets, strings):
+def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets, strings):
     def matrix_zip(depth, arrays: list) -> list:
         assert len(arrays) > 0
         if depth <= 0:
@@ -181,25 +200,24 @@ def calc_scores(tokens_targets, tokens, strings_targets, strings):
         _ = lambda x: mapper(*x)
         return matrix_map(depth, array, _)
 
-    def matrix_parse(depth, _tokens, _strings):
-        def _(tokens, strings) -> Tree:
+    def matrix_parse(depth, _labels, _tokens, _strings):
+        def _(label, tokens, strings) -> Tree:
             raw_tokens = []
-            for token, string in zip(tokens, strings):
-                if token == nop:
-                    continue
-                token = Embeddings.tokens().get_name(token)
-                if token == Tokens.PARAM:
-                    token = Tokens.PARAM + "[%d]" % MAX_PARAM
-                if token == Types.STRING:
-                    string = (word for word in string if word != pad)
-                    token = " ".join(Embeddings.words().get_name(word) for word in string)
-                    token = '"%s"' % token.replace('"', "'")
-                raw_tokens.append(token)
-            if tokens[0] == nop:
-                raw_tokens = []
-            else:
-                raw_tokens.insert(0, Tokens.STRONG)
-                raw_tokens.insert(0, Tokens.ROOT)
+            if tokens[0] != nop:
+                for token, string in zip(tokens, strings):
+                    if token == nop:
+                        continue
+                    token = Embeddings.tokens().get_name(token)
+                    if token == Tokens.PARAM:
+                        token = Tokens.PARAM + "[%d]" % MAX_PARAM
+                    if token == Types.STRING:
+                        string = (word for word in string if word != pad)
+                        token = " ".join(Embeddings.words().get_name(word) for word in string)
+                        token = '"%s"' % token.replace('"', "'")
+                    raw_tokens.append(token)
+            label = Embeddings.labels().get_name(label)
+            raw_tokens.insert(0, label)
+            raw_tokens.insert(0, Tokens.ROOT)
             result = list(Decompiler.typing(raw_tokens))
             try:
                 tree = Decompiler.bfs(result)
@@ -209,7 +227,7 @@ def calc_scores(tokens_targets, tokens, strings_targets, strings):
                 tree = Tree(root)
             return tree
 
-        zipped = matrix_zip(depth, (_tokens, _strings))
+        zipped = matrix_zip(depth, (_labels, _tokens, _strings))
         mapped = matrix_starmap(depth, zipped, _)
         return mapped
 
@@ -227,6 +245,7 @@ def calc_scores(tokens_targets, tokens, strings_targets, strings):
         mapped = matrix_map(depth, array, str)
         return mapped
 
+    undefined = Embeddings.labels().get_index(UNDEFINED)
     nop = Embeddings.tokens().get_index(NOP)
     pad = Embeddings.words().get_index(PAD)
     depth = 2
@@ -236,14 +255,15 @@ def calc_scores(tokens_targets, tokens, strings_targets, strings):
     code = matrix_flatten(depth, trees)
     contracts_targets = matrix_drop(depth, trees_targets)
     contracts = matrix_drop(depth, trees)
+    labels_scores = Score.calc(labels_targets, labels, None, undefined)
     tokens_scores = Score.calc(tokens_targets, tokens, None, nop)
     strings_scores = Score.calc(strings_targets, strings, -1, pad)
     contracts_scores = Score.calc(contracts_targets, contracts, None, Tokens.ROOT)
     code_scores = Score.calc(code_targets, code, None, Tokens.ROOT)
-    return tokens_scores, strings_scores, contracts_scores, code_scores
+    return labels_scores, tokens_scores, strings_scores, contracts_scores, code_scores
 
 
-def print_diff(inputs, attention, raw_tokens, tokens_targets, tokens, strings_targets, strings):
+def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, strings, raw_tokens):
     class Align(enum.Enum):
         left = enum.auto()
         right = enum.auto()
@@ -328,7 +348,7 @@ def print_diff(inputs, attention, raw_tokens, tokens_targets, tokens, strings_ta
             for text in split(colorized, NEXT, PAD):
                 if len(text) == 0:
                     continue
-                for line in cut(" ".join(text), formatter.size - 2, Align.left):
+                for line in cut(" ".join(text), formatter.input_size - 2, Align.left):
                     formatter.print(line)
 
     def print_raw_tokens(formatter, raw_tokens):
@@ -344,7 +364,9 @@ def print_diff(inputs, attention, raw_tokens, tokens_targets, tokens, strings_ta
             for line in cut(text, formatter.row_size(-1), Align.left):
                 formatter.print(token, line)
 
-    def print_strings(formatter, tokens, strings, strings_targets):
+    def print_strings(formatter, label, tokens, strings, strings_targets):
+        label = Embeddings.tokens().get_name(label)
+        formatter.print(label, "")
         for token, string, target in zip(tokens, strings, strings_targets):
             token = Embeddings.tokens().get_name(token)
             string = (Embeddings.words().get_name(index) if index >= 0 else " " for index in string)
@@ -354,45 +376,39 @@ def print_diff(inputs, attention, raw_tokens, tokens_targets, tokens, strings_ta
                 formatter.print(token, line)
 
     formatter0 = Formatter(("tokens", "strings"), ("s", "s"), (30, 100))
-    formatter1 = Formatter(["text"], ["s"], [formatter0.size - 2])
     batch_size = len(tokens)
     for i in range(batch_size):
         num_conditions = len(tokens[i])
         formatter0.print_upper_delimiter()
         for j in range(num_conditions):
-            print_strings(formatter0, tokens[i][j], strings[i][j], strings_targets[i][j])
+            print_strings(formatter0, labels[i][j], tokens[i][j], strings[i][j], strings_targets[i][j])
             formatter0.print_delimiter()
-            print_strings(formatter0, tokens_targets[i][j], strings_targets[i][j], strings_targets[i][j])
+            print_strings(formatter0, labels_targets[i][j], tokens_targets[i][j], strings_targets[i][j],
+                          strings_targets[i][j])
             formatter0.print_delimiter()
             print_raw_tokens(formatter0, raw_tokens[i][j])
-            formatter1.print_delimiter()
-            print_doc(formatter1, inputs[i], attention[i][j])
             if j < num_conditions - 1:
-                formatter1.print_delimiter()
-        formatter1.print_lower_delimiter()
+                formatter0.print_delimiter()
+        formatter0.print_lower_delimiter()
 
 
-def print_scores(scores) -> (Score, Score, Score, Score):
-    def to_short_tuple(score: Score):
+def print_scores(scores):
+    def to_tuple(score: Score):
         f1 = score.F_score(1) * 100
         acc = score.accuracy * 100
         jcc = score.jaccard * 100
         return f1, acc, jcc
 
-    tokens_scores, strings_scores, templates_scores, codes_scores = zip(*scores)
+    labels_score, tokens_score, strings_score, templates_score, codes_score = scores
     formatter = Formatter(("", "F1", "Accuracy", "Jaccard"), ("s", ".1f", ".1f", ".1f"), (20, 20, 20, 20))
     formatter.raw_print = logger.error
     formatter.print_head()
-    tokens_score = Score.concat(tokens_scores)
-    formatter.print("Tokens", *to_short_tuple(tokens_score))
-    strings_score = Score.concat(strings_scores)
-    formatter.print("Strings", *to_short_tuple(strings_score))
-    templates_score = Score.concat(templates_scores)
-    formatter.print("Templates", *to_short_tuple(templates_score))
-    codes_score = Score.concat(codes_scores)
-    formatter.print("Codes", *to_short_tuple(codes_score))
+    formatter.print("Labels", *to_tuple(labels_score))
+    formatter.print("Tokens", *to_tuple(tokens_score))
+    formatter.print("Strings", *to_tuple(strings_score))
+    formatter.print("Templates", *to_tuple(templates_score))
+    formatter.print("Codes", *to_tuple(codes_score))
     formatter.print_lower_delimiter()
-    return tokens_score, strings_score, templates_score, codes_score
 
 
 def newest(path: str, filtrator):

@@ -552,7 +552,8 @@ def attention_dynamic_rnn(
         num_heads=1,
         loop_function=None,
         dtype=None,
-        scope=None
+        scope=None,
+        initial_state_attention=False
 ):
     """RNN decoder with attention for the sequence-to-sequence model.
 
@@ -573,6 +574,10 @@ def attention_dynamic_rnn(
           * next is a 2D Tensor of shape [batch_size x input_size].
       dtype: The dtype to use for the RNN initial state (default: tf.float32).
       scope: VariableScope for the created subgraph; default: "attention_decoder".
+      initial_state_attention: If False (default), initial attentions are zero.
+        If True, initialize the attentions from the initial state and attention
+        states -- useful when we wish to resume decoding from a previously
+        stored decoder state and attention states.
 
     Returns:
       A tuple of the form (outputs, state), where:
@@ -645,16 +650,6 @@ def attention_dynamic_rnn(
             hiddens.append(hidden)
             attn_lengths.append(attn_length)
 
-        if initial_state is None:
-            state = array_ops.zeros([batch_size, cell.state_size], dtype, "initial_state")
-        else:
-            state = initial_state
-
-        batch_attn_size = array_ops.stack([batch_size, attn_size])
-        attentions = [array_ops.zeros(batch_attn_size, dtype) for _ in range(num_heads * num_attentions)]
-        for attn in attentions:  # Ensure the second shape of attention vectors is set.
-            attn.set_shape([None, attn_size])
-
         bias_initializer = init_ops.constant_initializer(0, dtype)
         with vs.variable_scope("AttentionInputProjection"):
             input_length = input_size + attn_size * num_heads * num_attentions
@@ -680,15 +675,11 @@ def attention_dynamic_rnn(
                 ta = tensor_array_ops.TensorArray(dtype, time_steps, tensor_array_name="attentions_weights_%d" % i)
                 attentions_weights_ta.append(ta)
 
-        time = array_ops.constant(0, dtypes.int32, name="time")
-        input = array_ops.gather(inputs, 0)
-        output = array_ops.constant(0, dtypes.float32, [batch_size, output_size], name="output")
-
         def attention(_state):
             """Put attention masks on hidden using hidden_features and query."""
             with vs.variable_scope("Attention"):
                 attentions = []  # Results of attention reads will be stored here.
-                attentions_weights = []
+                weights = []
                 for i in range(num_attentions):
                     attn_length = attn_lengths[i]
                     hidden = hiddens[i]
@@ -699,14 +690,16 @@ def attention_dynamic_rnn(
                         y = array_ops.reshape(y, [batch_size, 1, 1, attn_size])
                         # Attention mask is a softmax of v' * tanh(...).
                         s = math_ops.reduce_sum(vector * math_ops.tanh(hidden_features + y), [2, 3])
-                        attention_weights = array_ops.reshape(math_ops.sigmoid(s), [batch_size, attn_length, 1, 1])
+                        weight = math_ops.sigmoid(s)
+                        weights.append(weight)
+                        weight = array_ops.reshape(weight, [batch_size, attn_length, 1, 1])
                         # Now calculate the attention-weighted vector.
-                        attention = math_ops.reduce_sum(attention_weights * hidden, [1, 2])
-                        attentions_weights.append(array_ops.reshape(attention_weights, [batch_size, attn_length]))
-                        attentions.append(array_ops.reshape(attention, [batch_size, attn_size]))
-            return attentions, attentions_weights
+                        attention = math_ops.reduce_sum(weight * hidden, [1, 2])
+                        attention = array_ops.reshape(attention, [batch_size, attn_size])
+                        attentions.append(attention)
+            return attentions, weights
 
-        def time_step(time, output_ta, state_ta, attentions_weights_ta, _, input, state, attentions):
+        def time_step(time, output_ta, state_ta, attentions_weights_ta, input, state, attentions):
             with vs.variable_scope("Time-Step"):
                 if loop_function is None:
                     input = array_ops.gather(inputs, time)
@@ -723,12 +716,26 @@ def attention_dynamic_rnn(
                 state_ta = state_ta.write(time, state)
                 for i in range(num_heads * num_attentions):
                     attentions_weights_ta[i] = attentions_weights_ta[i].write(time, attentions_weights[i])
-            return time + 1, output_ta, state_ta, attentions_weights_ta, output, input, state, attentions
+            return time + 1, output_ta, state_ta, attentions_weights_ta, input, state, attentions
+
+        if initial_state is None:
+            initial_state = array_ops.zeros([batch_size, cell.state_size], dtype, "initial_state")
+
+        batch_attn_size = array_ops.stack([batch_size, attn_size])
+        if initial_state_attention:
+            attentions = attention(initial_state)
+        else:
+            attentions = [array_ops.zeros(batch_attn_size, dtype) for _ in range(num_heads * num_attentions)]
+            for attn in attentions:  # Ensure the second shape of attention vectors is set.
+                attn.set_shape([None, attn_size])
+
+        time = array_ops.constant(0, dtypes.int32, name="time")
+        input = array_ops.gather(inputs, 0)
 
         _, output_ta, state_ta, attentions_weights_ta, *_ = control_flow_ops.while_loop(
             cond=lambda time, *_: time < time_steps,
             body=time_step,
-            loop_vars=(time, output_ta, state_ta, attentions_weights_ta, output, input, state, attentions)
+            loop_vars=(time, output_ta, state_ta, attentions_weights_ta, input, initial_state, attentions)
         )
 
         outputs = output_ta.stack()
@@ -876,13 +883,17 @@ def stack_attention_dynamic_rnn(cells,
         raise ValueError("Must specify at least one fw cell for RNN.")
     if not isinstance(cells, list):
         raise ValueError("cells must be a list of RNNCells (one per layer).")
-    if initial_states is not None and (not isinstance(cells, list) or len(cells) != len(cells)):
+    if initial_states is not None and not isinstance(cells, list):
+        raise ValueError("initial_states must be a list of state tensors (one per layer).")
+    if initial_states is not None and len(initial_states) != len(cells):
         raise ValueError("initial_states must be a list of state tensors (one per layer).")
     if not loop_function and not use_inputs:
         input_size = inputs.get_shape()[2].value
+
+        bias_initializer = init_ops.constant_initializer(0, dtype)
         with vs.variable_scope("LoopFunctionVariables"):
             W_loop = vs.get_variable(_WEIGHTS_NAME, [output_size, input_size], dtype)
-            B_loop = vs.get_variable(_BIAS_NAME, [input_size], dtype, init_ops.constant_initializer(0, dtype))
+            B_loop = vs.get_variable(_BIAS_NAME, [input_size], dtype, bias_initializer)
 
         def loop_function(prev, _):
             return nn_ops.relu(prev @ W_loop + B_loop)
