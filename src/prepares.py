@@ -100,12 +100,18 @@ class Compiler(TreeVisitor):
             self.tokens.append(token.name)
 
 
-def convert_to(tree: Tree, height: int) -> List[Tuple[List[str], Dict[int, List[str]]]]:
+def convert_to(tree: Tree, height: int, filling: bool, flatten_type: str):
     Validator().accept(tree)
-    equalizer = Equalizer(height)
-    tree = equalizer.accept(tree)
+    if filling:
+        equalizer = Equalizer(height)
+        tree = equalizer.accept(tree)
     forest = [Tree(child) for child in tree.root.children]
-    compiler = Compiler(BfsGuide())
+    if flatten_type == "bfs":
+        compiler = Compiler(BfsGuide())
+    elif flatten_type == "dfs":
+        compiler = Compiler(DfsGuide())
+    else:
+        raise ValueError("Flatten type '%s' hasn't recognised" % flatten_type)
     result = [compiler.accept(tree) for tree in forest]
     return result
 
@@ -269,7 +275,7 @@ def parse_contract(method):
     return method
 
 
-def build_batch(methods: List[dict]):
+def build_batch(methods: List[dict], filling, flatten_type):
     undefined = Embeddings.labels().get_index(UNDEFINED)
     pad = Embeddings.words().get_index(PAD)
     nop = Embeddings.tokens().get_index(NOP)
@@ -287,7 +293,7 @@ def build_batch(methods: List[dict]):
     contracts = [method[CONTRACT] for method in methods]
     height = max(contract.height() for contract in contracts)
     labels_length = max(len(contract.root.children) for contract in contracts)
-    contracts = [convert_to(contract, height) for contract in contracts]
+    contracts = [convert_to(contract, height, filling, flatten_type) for contract in contracts]
     height -= 2
     tokens_length = 2 ** height - 1
 
@@ -350,8 +356,8 @@ def contract(methods) -> Iterable[dict]:
     return methods
 
 
-def batches(methods, batch_size) -> list:
+def batches(methods, batch_size, filling, flatten_type) -> list:
     batches = batching(methods, batch_size)
-    batches = [build_batch(method) for method in batches]
+    batches = [build_batch(method, filling, flatten_type) for method in batches]
     random.shuffle(batches)
     return batches

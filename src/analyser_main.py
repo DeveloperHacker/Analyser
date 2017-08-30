@@ -101,7 +101,7 @@ def prepare(options: Options):
     methods = prepares.java_doc(methods)
     methods = prepares.contract(methods)
     methods = statistic.accountant("number").considers(methods)
-    batches = prepares.batches(methods, options.batch_size)
+    batches = prepares.batches(methods, options.batch_size, FILLING, options.flatten_type)
     batches = list(batches)
     dumpers.pkl_dump(batches, options.data_set_path)
     logger.info("Number of batches: %d" % len(batches))
@@ -125,16 +125,26 @@ def test(options: Options):
 
 @trace("RANDOM")
 def random_options(options: Options):
+    names = (
+        "inputs_state_size",
+        "labels_state_size",
+        "tokens_state_size",
+        "strings_state_size",
+        "inputs_hidden_size",
+        "labels_hidden_size",
+        "tokens_hidden_size",
+        "strings_hidden_size",
+        "l2_weight")
+    sub = lambda x: tuple(x[name] for name in names if name in x)
+
     results = dumpers.json_load(RESULTS_PATH)
-    used_options = [result["options"] for result in results]
-    while options.serialize() in used_options:
+    used_options = [sub(result["options"]) for result in results]
+    while sub(options.serialize()) in used_options:
         options.inputs_state_size = random.randint(1, 20) * 10
         options.inputs_hidden_size = random.randint(1, 20) * 10
         options.tokens_state_size = random.randint(1, 20) * 10
         options.strings_state_size = random.randint(1, 20) * 10
-    names = ("inputs_state_size", "labels_state_size", "tokens_state_size", "strings_state_size")
-    sub = lambda x: tuple((name, x[name]) for name in names if name in x)
-    options.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % tuple(x[1] for x in sub(options.serialize()))
+    options.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % sub(options.serialize())[:4]
 
 
 @trace("STORE")
@@ -143,16 +153,18 @@ def store(losses, scores, options: Options):
     labels_score, tokens_score, strings_score, templates_score, codes_score = scores
     result = {
         "options": options.serialize(),
+        "losses": {
+            "labels": float(labels_loss),
+            "tokens": float(tokens_loss),
+            "strings": float(strings_loss),
+            "complex": float(loss)
+        },
         "scores": {
-            "labels_loss": labels_loss,
-            "tokens_loss": tokens_loss,
-            "strings_loss": strings_loss,
-            "loss": loss,
-            "labels_score": tokens_score.serialize(),
-            "tokens_score": tokens_score.serialize(),
-            "strings_score": strings_score.serialize(),
-            "templates_score": templates_score.serialize(),
-            "codes_score": codes_score.serialize()
+            "labels": labels_score.serialize(),
+            "tokens": tokens_score.serialize(),
+            "strings": strings_score.serialize(),
+            "templates": templates_score.serialize(),
+            "codes": codes_score.serialize()
         }
     }
     dumpers.json_print(result, logger.error)
@@ -171,30 +183,40 @@ FLAGS = flags.FLAGS
 
 RESULTS_PATH = "resources/analyser/results.json"
 RAW_DATA_SET_PATH = 'resources/data-sets/joda-time.json'
+FILLING = True
 
 
 def main():
-    options = Options()
-    options.minimum_length = 2
-    options.train_set = 0.8
-    options.validation_set = 0.1
-    options.test_set = 0.1
-    options.l2_weight = 0.001
-    options.epochs = 100
-    options.batch_size = 4
-    options.summaries_dir = 'resources/analyser/summaries'
-    options.data_set_path = 'resources/analyser/data-set.pickle'
-    options.inputs_state_size = 40
-    options.labels_state_size = 40
-    options.tokens_state_size = 40
-    options.strings_state_size = 40
-    options.model_dir = 'resources/analyser/model-40-40-40-40'
-    if FLAGS.random: random_options(options)
-    dumpers.json_print(options.serialize(), logger.error)
-    if FLAGS.prepare: prepare(options)
-    if FLAGS.train: train(options)
-    losses, scores = test(options)
-    store(losses, scores, options)
+    try:
+        options = Options()
+        options.minimum_length = 2
+        options.train_set = 0.8
+        options.validation_set = 0.1
+        options.test_set = 0.1
+        options.l2_weight = 0.001
+        options.epochs = 100
+        options.batch_size = 4
+        options.summaries_dir = 'resources/analyser/summaries'
+        options.data_set_path = 'resources/analyser/data-set.pickle'
+        options.tokens_output_type = "tree"
+        options.flatten_type = "bfs"
+        options.inputs_state_size = 40
+        options.labels_state_size = 120
+        options.tokens_state_size = 40
+        options.strings_state_size = 40
+        options.model_dir = 'resources/analyser/model-40-120-40-40'
+        if FLAGS.random: random_options(options)
+        dumpers.json_print(options.serialize(), logger.error)
+        logger.info("RESULTS_PATH = %s" % RESULTS_PATH)
+        logger.info("RAW_DATA_SET_PATH = %s" % RAW_DATA_SET_PATH)
+        logger.info("FILLING = %r" % FILLING)
+        options.validate()
+        if FLAGS.prepare: prepare(options)
+        if FLAGS.train: train(options)
+        losses, scores = test(options)
+        store(losses, scores, options)
+    except Exception as ex:
+        logger.exception(ex)
 
 
 if __name__ == '__main__':

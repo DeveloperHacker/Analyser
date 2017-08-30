@@ -25,7 +25,7 @@ class Attention:
     def __init__(self, inputs, state_size, num_heads=1, dtype=None, scope=None):
         """Attention Mechanism for attention decoder RNN.
 
-        :param inputs: list of 3D Tensors or 3D Tensor [batch_size x attn_length x attn_size].
+        :param inputs: list of 3D Tensors or 3D Tensor [batch_size x input_length x input_size].
         :param state_size: Size of the state vectors.
         :param num_heads: Number of attention heads that read from attention_states.
         :param dtype: The dtype to use for the RNN initial state (default: tf.float32).
@@ -70,8 +70,8 @@ class Attention:
                     hidden_features = []
                     vector = []
                     for j in range(self._num_heads):
-                        k = vs.get_variable("AttentionW_%d" % j, [1, 1, self._input_size, self._input_size])
-                        hidden_features.append(nn_ops.conv2d(hidden, k, [1, 1, 1, 1], "SAME"))
+                        kernel = vs.get_variable("AttentionW_%d" % j, [1, 1, self._input_size, self._input_size])
+                        hidden_features.append(nn_ops.conv2d(hidden, kernel, [1, 1, 1, 1], "SAME"))
                         vector.append(vs.get_variable("AttentionV_%d" % j, [self._input_size]))
 
                 self._hiddens_features.append(hidden_features)
@@ -243,8 +243,9 @@ class StackFunction:
         return self.call(inputs, outputs, states, time)
 
 
-def attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, go=None,
-                               initial_state=None, loop_function=None, dtype=None, scope=None):
+def attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None,
+                               initial_state=None, loop_function=None,
+                               initial_state_attention=True, dtype=None, scope=None):
     assert isinstance(cell, (list, tuple)) and len(cell) == 2
     assert inputs.get_shape()[1].value == attention.batch_size
     assert attention.state_size == cell[0].state_size
@@ -290,21 +291,11 @@ def attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, go=Non
                 attentions_ta.append(ta)
 
         def sub_time_step(cell, time, size, state_ta, output_ta, attentions_ta, weights_ta, initial_step=False):
+            input = array_ops.gather(inputs, size)
             if initial_step:
-                if go is None:
-                    input = array_ops.zeros([batch_size, input_size], dtype, "go")
-                else:
-                    input = go
-                if initial_state is None:
-                    state = array_ops.zeros([batch_size, state_size], dtype, "initial_state")
-                else:
-                    state = initial_state
-                batch_attn_size = array_ops.stack([batch_size, attention.input_size])
-                attentions = [array_ops.zeros(batch_attn_size, dtype) for i in range(attention.length)]
-                for attn in attentions:  # Ensure the second shape of attention vectors is set.
-                    attn.set_shape([None, attention.input_size])
+                state = initial_state
+                attentions = initial_attentions
             else:
-                input = array_ops.gather(inputs, time)
                 state = state_ta.read(time)
                 attentions = [attention_ta.read(time) for attention_ta in attentions_ta]
             if loop_function is not None:
@@ -338,9 +329,18 @@ def attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, go=Non
 
         time = array_ops.constant(0, dtypes.int32, name="time")
         size = array_ops.constant(0, dtypes.int32, name="size")
+        if initial_state is None:
+            initial_state = array_ops.zeros([batch_size, state_size], dtype, "initial_state")
+        if initial_state_attention:
+            initial_attentions, _ = attention(initial_state)
+        else:
+            batch_attn_size = array_ops.stack([batch_size, attention.input_size])
+            initial_attentions = [array_ops.zeros(batch_attn_size, dtype) for _ in range(attention.length)]
+            for attn in initial_attentions:  # Ensure the second shape of attention vectors is set.
+                attn.set_shape([None, attention.input_size])
         arrays = (state_ta, output_ta, attentions_ta, weights_ta)
         size, *arrays = sub_time_step(right_cell, time, size, *arrays, True)
-        _, _, *arrays = control_flow_ops.while_loop(cond, time_step, (time, size, *arrays))
+        _, _, *arrays = control_flow_ops.while_loop(cond, time_step, (time, size, *arrays), parallel_iterations=1)
         state_ta, output_ta, attentions_ta, weights_ta = arrays
         indices = array_ops.stack(math_ops.range(input_length))
         outputs = output_ta.gather(indices)
@@ -350,9 +350,25 @@ def attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, go=Non
     return outputs, states, attentions, weights
 
 
-def stack_attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, go=None,
+def stack_attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None,
                                      stack_size=None, initial_states=None, loop_function=None, stack_function=None,
-                                     dtype=None, scope=None, stack_scope=None):
+                                     initial_state_attention=True, dtype=None, scope=None, stack_scope=None):
+    """
+
+    :param cell:
+    :param inputs:
+    :param attention:
+    :param output_size:
+    :param stack_size:
+    :param initial_states: 3D-Tensor with shape [stack_size x batch_size x state_size]
+    :param loop_function:
+    :param stack_function:
+    :param initial_state_attention:
+    :param dtype:
+    :param scope:
+    :param stack_scope:
+    :return:
+    """
     assert isinstance(cell, (list, tuple)) and len(cell) == 2
     assert inputs.get_shape()[1].value == attention.batch_size
     assert attention.state_size == cell[0].state_size
@@ -396,7 +412,8 @@ def stack_attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, 
                 if initial_states is not None:
                     initial_state = array_ops.gather(initial_states, time)
                 outputs, states, attentions, weights = attention_tree_dynamic_rnn(
-                    cell, inputs, attention, output_size, go, initial_state, loop_function, dtype, scope)
+                    cell, inputs, attention, output_size, initial_state, loop_function,
+                    initial_state_attention, dtype, scope)
                 inputs = outputs
                 if stack_function is not None:
                     inputs = stack_function(inputs, outputs, states, time)
@@ -422,7 +439,8 @@ def stack_attention_tree_dynamic_rnn(cell, inputs, attention, output_size=None, 
 
 
 def attention_dynamic_rnn(cell, inputs, attention, output_size=None, initial_output=None,
-                          initial_state=None, loop_function=None, dtype=None, scope=None):
+                          initial_state=None, loop_function=None,
+                          initial_state_attention=True, dtype=None, scope=None):
     batch_size = inputs.get_shape()[1].value
     assert batch_size == attention.batch_size
     assert attention.state_size == cell.state_size
@@ -481,19 +499,23 @@ def attention_dynamic_rnn(cell, inputs, attention, output_size=None, initial_out
         def cond(time, output, state, attentions, state_ta, output_ta, attentions_ta, weights_ta):
             return time < output_length
 
-        time = array_ops.constant(0, dtypes.int32, name="time")
-        batch_attn_size = array_ops.stack([batch_size, attention.input_size])
-        attentions = [array_ops.zeros(batch_attn_size, dtype) for _ in range(attention.length)]
-        for attn in attentions:  # Ensure the second shape of attention vectors is set.
-            attn.set_shape([None, attention.input_size])
-        if initial_output is None:
-            output = array_ops.zeros([batch_size, output_size], dtype, "initial_output")
-        else:
-            output = initial_output
         if initial_state is None:
             state = array_ops.zeros([batch_size, cell.state_size], dtype, "initial_state")
         else:
             state = initial_state
+        time = array_ops.constant(0, dtypes.int32, name="time")
+        if initial_state_attention:
+            attentions, weights = attention(state)
+        else:
+            batch_attn_size = array_ops.stack([batch_size, attention.input_size])
+            attentions = [array_ops.zeros(batch_attn_size, dtype) for _ in range(attention.length)]
+            for attn in attentions:  # Ensure the second shape of attention vectors is set.
+                attn.set_shape([None, attention.input_size])
+        if initial_output is None:
+            output = array_ops.zeros([batch_size, output_size], dtype, "initial_output")
+        else:
+            output = initial_output
+
         arrays = (state_ta, output_ta, attentions_ta, weights_ta)
         _, _, _, _, *arrays = control_flow_ops.while_loop(cond, time_step, (time, output, state, attentions, *arrays))
         state_ta, output_ta, attentions_ta, weights_ta = arrays
@@ -506,7 +528,7 @@ def attention_dynamic_rnn(cell, inputs, attention, output_size=None, initial_out
 
 def stack_attention_dynamic_rnn(cell, inputs, attention, output_size=None, initial_outputs=None,
                                 stack_size=None, initial_states=None, loop_function=None, stack_function=None,
-                                dtype=None, scope=None, stack_scope=None):
+                                initial_state_attention=True, dtype=None, scope=None, stack_scope=None):
     batch_size = inputs.get_shape()[1].value
     assert attention.batch_size == batch_size
     state_size = cell.state_size
@@ -550,7 +572,8 @@ def stack_attention_dynamic_rnn(cell, inputs, attention, output_size=None, initi
                 if initial_output is not None:
                     initial_output = array_ops.gather(initial_outputs, time)
                 outputs, states, attentions, weights = attention_dynamic_rnn(
-                    cell, inputs, attention, output_size, initial_output, initial_state, loop_function, dtype, scope)
+                    cell, inputs, attention, output_size, initial_output, initial_state, loop_function,
+                    initial_state_attention, dtype, scope)
                 inputs = outputs
                 if stack_function is not None:
                     inputs = stack_function(inputs, outputs, states, time)

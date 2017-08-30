@@ -18,6 +18,8 @@ class Options:
         self.model_dir = None
         self.data_set_path = None
         self.summaries_dir = None
+        self.tokens_output_type = None
+        self.flatten_type = None
 
     def validate(self):
         assert self.epochs is not None
@@ -34,6 +36,11 @@ class Options:
         assert self.model_dir is not None
         assert self.data_set_path is not None
         assert self.summaries_dir is not None
+        assert self.tokens_output_type is not None
+        assert self.tokens_output_type in ("tree", "sequence")
+        assert self.flatten_type is not None
+        assert self.flatten_type in ("dfs", "bfs")
+        assert self.tokens_output_type != "tree" or self.flatten_type == "bfs"
 
     @staticmethod
     def value_of(json_object: dict) -> 'Options':
@@ -56,6 +63,8 @@ class Options:
         options.model_dir = json_object.get("model_dir", None)
         options.data_set_path = json_object.get("data_set_path", None)
         options.summaries_dir = json_object.get("summaries_dir", None)
+        options.tokens_output_type = json_object.get("tokens_output_type", None)
+        options.flatten_type = json_object.get("flatten_type", None)
         return options
 
     def serialize(self) -> dict:
@@ -77,5 +86,7 @@ class Options:
             "test_set": float(self.test_set),
             "model_dir": str(self.model_dir),
             "data_set_path": str(self.data_set_path),
-            "summaries_dir": str(self.summaries_dir)}
+            "summaries_dir": str(self.summaries_dir),
+            "tokens_output_type": str(self.tokens_output_type),
+            "flatten_type": str(self.flatten_type)}
         return json_object

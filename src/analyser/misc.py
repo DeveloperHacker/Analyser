@@ -171,15 +171,11 @@ def transpose_attention(attentions, num_heads=1):
     return attentions
 
 
-class Dropper(TreeVisitor):
-    def __init__(self):
-        super().__init__(DfsGuide())
+def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets, strings, flatten_type):
+    class Dropper(TreeVisitor):
+        def visit_string(self, depth: int, node: Node, parent: Node):
+            node.token = Token(Types.STRING, Types.STRING)
 
-    def visit_string(self, depth: int, node: Node, parent: Node):
-        node.token = Token(Types.STRING, Types.STRING)
-
-
-def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets, strings):
     def matrix_zip(depth, arrays: list) -> list:
         assert len(arrays) > 0
         if depth <= 0:
@@ -216,11 +212,17 @@ def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets,
                         token = '"%s"' % token.replace('"', "'")
                     raw_tokens.append(token)
             label = Embeddings.labels().get_name(label)
-            raw_tokens.insert(0, label)
+            if label != UNDEFINED:
+                raw_tokens.insert(0, label)
             raw_tokens.insert(0, Tokens.ROOT)
-            result = list(Decompiler.typing(raw_tokens))
+            result = Decompiler.typing(raw_tokens)
+            if flatten_type not in ("bfs", "dfs"):
+                raise ValueError("Flatten type '%s' hasn't recognised" % flatten_type)
             try:
-                tree = Decompiler.bfs(result)
+                if flatten_type == "bfs":
+                    tree = Decompiler.bfs(result)
+                if flatten_type == "dfs":
+                    tree = Decompiler.dfs(result)
             except Exception:
                 token = Token(Tokens.ROOT, Types.ROOT)
                 root = Node(token)
@@ -234,7 +236,7 @@ def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets,
     def matrix_drop(depth, array):
         def _(tree: Tree):
             tree = tree.clone()
-            Dropper().accept(tree)
+            Dropper(DfsGuide()).accept(tree)
             return tree
 
         mapped = matrix_map(depth, array, _)
@@ -249,8 +251,8 @@ def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets,
     nop = Embeddings.tokens().get_index(NOP)
     pad = Embeddings.words().get_index(PAD)
     depth = 2
-    trees_targets = matrix_parse(depth, tokens_targets, strings_targets)
-    trees = matrix_parse(depth, tokens, strings)
+    trees_targets = matrix_parse(depth, labels_targets, tokens_targets, strings_targets)
+    trees = matrix_parse(depth, labels, tokens, strings)
     code_targets = matrix_flatten(depth, trees_targets)
     code = matrix_flatten(depth, trees)
     contracts_targets = matrix_drop(depth, trees_targets)
@@ -263,7 +265,7 @@ def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets,
     return labels_scores, tokens_scores, strings_scores, contracts_scores, code_scores
 
 
-def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, strings, raw_tokens):
+def print_diff(inputs, labels_targets, labels, tokens_targets, tokens, strings_targets, strings, raw_tokens):
     class Align(enum.Enum):
         left = enum.auto()
         right = enum.auto()
@@ -293,15 +295,7 @@ def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, 
         lines = (" " + sub_line for line in string.split("\n") for sub_line in chunks(line, text_size - 1))
         return lines
 
-    def print_doc(formatter, indexed_doc, words_weighs):
-        STYLES = (Styles.foreground.gray,
-                  Styles.bold % Styles.foreground.cyan,
-                  Styles.bold % Styles.foreground.blue,
-                  Styles.bold % Styles.foreground.magenta,
-                  Styles.bold % Styles.foreground.red,
-                  Styles.bold % Styles.foreground.yellow,
-                  Styles.bold % Styles.foreground.green)
-
+    def print_doc(indexed_doc):
         def normalization(values: Iterable[float]) -> np.array:
             values = np.asarray(values)
             max_value = np.max(values)
@@ -327,31 +321,14 @@ def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, 
                     result.append(word)
             yield result
 
-        for weighs in words_weighs:
-            maximum = np.max(weighs)
-            minimum = np.min(weighs)
-            mean = np.mean(weighs)
-            variance = np.var(weighs)
-            text = "m[W] = {:.4f}, d[W] = {:.4f}, min(W) = {:.4f}, max(W) = {:.4f}"
-            formatter.print(text.format(mean, variance, minimum, maximum))
-            words = (Embeddings.words().get_name(index) for index in indexed_doc)
-            # weighs = top_k_normalization(6, weighs)
-            weighs = normalization(weighs)
-            colorized = []
-            for word, weigh in zip(words, weighs):
-                style = STYLES[-1]
-                for i, color in enumerate(STYLES):
-                    if weigh < (i + 1) / len(STYLES):
-                        style = color
-                        break
-                colorized.append(style % word)
-            for text in split(colorized, NEXT, PAD):
-                if len(text) == 0:
-                    continue
-                for line in cut(" ".join(text), formatter.input_size - 2, Align.left):
-                    formatter.print(line)
+        words = (Embeddings.words().get_name(index) for index in indexed_doc)
+        for text in split(words, NEXT, PAD):
+            if len(text) == 0:
+                continue
+            for line in cut(" ".join(text), formatter.row_size(-1), Align.left):
+                formatter.print("", line)
 
-    def print_raw_tokens(formatter, raw_tokens):
+    def print_raw_tokens(raw_tokens):
         matrix = [[None for _ in range(len(raw_tokens))] for _ in range(len(Embeddings.tokens()))]
         for j, raw_token in enumerate(raw_tokens):
             color0 = lambda x: Styles.background.light_yellow if x > 1e-2 else Styles.foreground.gray
@@ -364,8 +341,8 @@ def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, 
             for line in cut(text, formatter.row_size(-1), Align.left):
                 formatter.print(token, line)
 
-    def print_strings(formatter, label, tokens, strings, strings_targets):
-        label = Embeddings.tokens().get_name(label)
+    def print_strings(label, tokens, strings, strings_targets):
+        label = Embeddings.labels().get_name(label)
         formatter.print(label, "")
         for token, string, target in zip(tokens, strings, strings_targets):
             token = Embeddings.tokens().get_name(token)
@@ -375,21 +352,23 @@ def print_diff(labels_targets, labels, tokens_targets, tokens, strings_targets, 
             for line in cut(" ".join(string), formatter.row_size(-1), Align.left):
                 formatter.print(token, line)
 
-    formatter0 = Formatter(("tokens", "strings"), ("s", "s"), (30, 100))
+    formatter = Formatter(("tokens", "strings"), ("s", "s"), (20, 80))
     batch_size = len(tokens)
     for i in range(batch_size):
         num_conditions = len(tokens[i])
-        formatter0.print_upper_delimiter()
+        formatter.print_upper_delimiter()
+        print_doc(inputs[i])
+        formatter.print_delimiter()
         for j in range(num_conditions):
-            print_strings(formatter0, labels[i][j], tokens[i][j], strings[i][j], strings_targets[i][j])
-            formatter0.print_delimiter()
-            print_strings(formatter0, labels_targets[i][j], tokens_targets[i][j], strings_targets[i][j],
+            print_strings(labels[i][j], tokens[i][j], strings[i][j], strings_targets[i][j])
+            formatter.print_delimiter()
+            print_strings(labels_targets[i][j], tokens_targets[i][j], strings_targets[i][j],
                           strings_targets[i][j])
-            formatter0.print_delimiter()
-            print_raw_tokens(formatter0, raw_tokens[i][j])
+            formatter.print_delimiter()
+            print_raw_tokens(raw_tokens[i][j])
             if j < num_conditions - 1:
-                formatter0.print_delimiter()
-        formatter0.print_lower_delimiter()
+                formatter.print_delimiter()
+        formatter.print_lower_delimiter()
 
 
 def print_scores(scores):

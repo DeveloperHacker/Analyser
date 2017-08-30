@@ -106,19 +106,50 @@ def sequence_tokens_output(cell, attention, output_size, output_length, initial_
 
 def tree_tokens_output(cell, attention, output_size, output_length, initial_states=None, output_height=None,
                        hidden_size=None, loop_function=None, stack_function=None, dtype=None, scope=None):
+    """
+
+    :param cell:
+    :param attention:
+    :param output_size:
+    :param output_length:
+    :param initial_states: 3D-Tensor with shape [output_height x batch_size x ?]
+    :param output_height:
+    :param hidden_size:
+    :param loop_function:
+    :param stack_function:
+    :param dtype:
+    :param scope:
+    :return:
+    """
+
     assert isinstance(cell, (list, tuple)) and len(cell) == 2
-    batch_size = attention.batch_size
     state_size = cell[0].state_size
+    assert state_size == attention.state_size
     if hidden_size is None:
         hidden_size = cell[0].output_size
     assert output_height is not None or initial_states is not None
+    _output_height = array_ops.shape(initial_states)[0]
     if output_height is None:
-        output_height = array_ops.shape(initial_states)[0]
+        output_height = _output_height
+    assert initial_states is None or _output_height == output_height
+    batch_size = initial_states.get_shape()[1].value
+    initial_state_size = initial_states.get_shape()[2].value
+    assert batch_size == attention.batch_size
 
     with vs.variable_scope(scope or "TreeTokensOutput", dtype=dtype) as scope:
         dtype = scope.dtype
 
         bias_initializer = init_ops.constant_initializer(0, dtype)
+        if initial_states is not None:
+            with vs.variable_scope("StateProjection"):
+                W_state = vs.get_variable(_WEIGHTS_NAME, [initial_state_size, state_size], dtype)
+                B_state = vs.get_variable(_BIAS_NAME, [state_size], dtype, bias_initializer)
+
+            shape = [output_height * batch_size, initial_state_size]
+            initial_states = array_ops.reshape(initial_states, shape)
+            initial_states = nn_impl.relu_layer(initial_states, W_state, B_state)
+            shape = [output_height, batch_size, state_size]
+            initial_states = array_ops.reshape(initial_states, shape)
         with vs.variable_scope("OutputProjection"):
             W = vs.get_variable(_WEIGHTS_NAME, [state_size, output_size], dtype)
             B = vs.get_variable(_BIAS_NAME, [output_size], dtype, bias_initializer)
@@ -140,12 +171,29 @@ def tree_tokens_output(cell, attention, output_size, output_length, initial_stat
 
 def strings_output(cell, attention, output_size, output_length, initial_states,
                    hidden_size=None, loop_function=None, stack_function=None, dtype=None, scope=None):
-    batch_size = attention.batch_size
+    """
+
+    :param cell:
+    :param attention:
+    :param output_size:
+    :param output_length:
+    :param initial_states: 4D-Tensor with shape [output_width x output_height x batch_size x ?]
+    :param hidden_size:
+    :param loop_function:
+    :param stack_function:
+    :param dtype:
+    :param scope:
+    :return:
+    """
+
     state_size = cell.state_size
     if hidden_size is None:
         hidden_size = cell.output_size
     output_width = array_ops.shape(initial_states)[0]
     output_height = array_ops.shape(initial_states)[1]
+    batch_size = initial_states.get_shape()[2].value
+    initial_state_size = initial_states.get_shape()[3].value
+    assert batch_size == attention.batch_size
 
     with vs.variable_scope(scope or "StringsOutput", dtype=dtype) as scope:
         dtype = scope.dtype
@@ -154,6 +202,15 @@ def strings_output(cell, attention, output_size, output_length, initial_states,
         with vs.variable_scope("OutputProjection"):
             W = vs.get_variable(_WEIGHTS_NAME, [state_size, output_size], dtype)
             B = vs.get_variable(_BIAS_NAME, [output_size], dtype, bias_initializer)
+        with vs.variable_scope("StateProjection"):
+            W_state = vs.get_variable(_WEIGHTS_NAME, [initial_state_size, state_size], dtype)
+            B_state = vs.get_variable(_BIAS_NAME, [state_size], dtype, bias_initializer)
+
+        shape = [output_width * output_height * batch_size, initial_state_size]
+        initial_states = array_ops.reshape(initial_states, shape)
+        initial_states = nn_impl.relu_layer(initial_states, W_state, B_state)
+        shape = [output_width, output_height, batch_size, state_size]
+        initial_states = array_ops.reshape(initial_states, shape)
 
         with vs.variable_scope("Arrays"):
             shape = [None, None, batch_size, state_size]

@@ -12,7 +12,8 @@ from tensorflow.python.ops.rnn_cell_impl import GRUCell
 from analyser import Embeddings
 from analyser.Options import Options
 from analyser.Score import Score
-from analyser.analyser_rnn import sequence_input, labels_output, tree_tokens_output, strings_output
+from analyser.analyser_rnn import sequence_input, labels_output, tree_tokens_output, strings_output, \
+    sequence_tokens_output
 from analyser.attention_dynamic_rnn import Attention
 from analyser.misc import cross_entropy_loss, l2_loss, batch_greedy_correct, calc_scores, print_diff, \
     print_scores, newest
@@ -43,30 +44,38 @@ class AnalyserNet:
             self.labels_length = tf.placeholder(tf.int32, [], "labels_length")
             self.tokens_length = tf.placeholder(tf.int32, [], "tokens_length")
             self.strings_length = tf.placeholder(tf.int32, [], "strings_length")
+            inputs = tf.gather(tf.constant(np.asarray(Embeddings.words().idx2emb)), self.inputs)
         with tf.variable_scope(scope or "Analyser", dtype=dtype) as scope, Timer("BUILD BODY"):
             dtype = scope.dtype
             cell_fw = GRUCell(self.options.inputs_state_size)
             cell_bw = GRUCell(self.options.inputs_state_size)
-            labels_cell = GRUCell(self.options.labels_state_size)
-            tokens_left_cell = GRUCell(self.options.tokens_state_size)
-            tokens_right_cell = GRUCell(self.options.tokens_state_size)
-            tokens_cell = (tokens_left_cell, tokens_right_cell)
-            strings_cell = GRUCell(self.options.strings_state_size)
-            inputs = tf.gather(tf.constant(np.asarray(Embeddings.words().idx2emb)), self.inputs)
             attention_states = sequence_input(
                 cell_fw, cell_bw, inputs, self.inputs_length, self.options.inputs_hidden_size, dtype)
             labels_attention = Attention(
                 attention_states, self.options.labels_state_size, dtype=dtype, scope="LabelsAttention")
+            labels_cell = GRUCell(self.options.labels_state_size)
             self.labels_logits, self.raw_labels, labels_states, attentions, weights = labels_output(
                 labels_cell, labels_attention, num_labels, self.labels_length,
                 hidden_size=self.options.labels_hidden_size, dtype=dtype)
             tokens_attention = Attention(
                 attention_states, self.options.tokens_state_size, dtype=dtype, scope="TokensAttention")
-            self.tokens_logits, self.raw_tokens, tokens_states, attentions, weights = tree_tokens_output(
-                tokens_cell, tokens_attention, num_tokens, self.tokens_length, labels_states,
-                hidden_size=self.options.tokens_hidden_size, dtype=dtype)
+            if options.tokens_output_type == "tree":
+                tokens_left_cell = GRUCell(self.options.tokens_state_size)
+                tokens_right_cell = GRUCell(self.options.tokens_state_size)
+                tokens_cell = (tokens_left_cell, tokens_right_cell)
+                self.tokens_logits, self.raw_tokens, tokens_states, attentions, weights = tree_tokens_output(
+                    tokens_cell, tokens_attention, num_tokens, self.tokens_length, labels_states,
+                    hidden_size=self.options.tokens_hidden_size, dtype=dtype)
+            elif options.tokens_output_type == "sequence":
+                tokens_cell = GRUCell(self.options.tokens_state_size)
+                self.tokens_logits, self.raw_tokens, tokens_states, attentions, weights = sequence_tokens_output(
+                    tokens_cell, tokens_attention, num_tokens, self.tokens_length, labels_states,
+                    hidden_size=self.options.tokens_hidden_size, dtype=dtype)
+            else:
+                raise ValueError("Tokens output type '%s' hasn't recognised" % options.tokens_output_type)
             strings_attention = Attention(
                 attention_states, self.options.strings_state_size, dtype=dtype, scope="StringsAttention")
+            strings_cell = GRUCell(self.options.strings_state_size)
             self.strings_logits, self.raw_strings, strings_states, attentions, weights = strings_output(
                 strings_cell, strings_attention, num_words, self.strings_length, tokens_states,
                 hidden_size=self.options.strings_hidden_size, dtype=dtype)
@@ -184,71 +193,77 @@ class AnalyserNet:
         return feed_dict
 
     def train(self):
-        nop = Embeddings.tokens().get_index(NOP)
-        heads = ("epoch", "time", "F1", "loss", "F1", "loss")
-        formats = ("d", ".4f", ".4f", ".4f", ".4f", ".4f")
-        formatter = Formatter(heads, formats, (9, 20, 20, 20, 21, 21), height=10)
-        figure = ProxyFigure("train", self.save_path + "/train.png")
-        validation_loss_graph = figure.curve(2, 1, 1, mode="-r")
-        train_loss_graph = figure.curve(2, 1, 1, mode="-b")
-        smoothed_train_f1_graph = figure.smoothed_curve(2, 1, 2, 0.64, mode="-b")
-        smoothed_validation_f1_graph = figure.smoothed_curve(2, 1, 2, 0.64, mode="-r")
-        figure.set_y_label(2, 1, 1, "loss")
-        figure.set_y_label(2, 1, 2, "accuracy")
-        figure.set_x_label(2, 1, 2, "epoch")
-        figure.set_label(2, 1, 1, "Train and validation losses")
-        figure.set_label(2, 1, 2, "Train and validation F1 score")
+        train_loss_graphs, validation_loss_graphs = [], []
+        figure0 = ProxyFigure("loss", self.save_path + "/loss.png")
+        loss_labels = ("Labels", "Tokens", "Strings", "Complex")
+        for i, label in enumerate(loss_labels):
+            train_loss_graphs.append(figure0.smoothed_curve(1, len(loss_labels), i + 1, 0.6, mode="-b"))
+            validation_loss_graphs.append(figure0.smoothed_curve(1, len(loss_labels), i + 1, 0.6, mode="-r"))
+            figure0.set_x_label(1, len(loss_labels), i + 1, "epoch")
+            figure0.set_label(1, len(loss_labels), i + 1, label)
+        figure0.set_y_label(1, len(loss_labels), 1, "loss")
+
+        train_score_graphs, validation_score_graphs = [], []
+        figure1 = ProxyFigure("score", self.save_path + "/score.png")
+        score_labels = ("Labels", "Tokens", "Strings", "Templates", "Code")
+        for i, label in enumerate(score_labels):
+            train_score_graphs.append(figure1.smoothed_curve(1, len(score_labels), i + 1, 0.6, mode="-b"))
+            validation_score_graphs.append(figure1.smoothed_curve(1, len(score_labels), i + 1, 0.6, mode="-r"))
+            figure1.set_x_label(1, len(score_labels), i + 1, "epoch")
+            figure1.set_label(1, len(score_labels), i + 1, label)
+        figure1.set_y_label(1, len(score_labels), 1, "score")
+
+        loss_labels = ("l_" + label for label in loss_labels)
+        score_labels = ("s_" + label for label in score_labels)
+        labels = [*loss_labels, *score_labels]
+        train_labels = ("t_" + label for label in labels)
+        validation_labels = ("v_" + label for label in labels)
+        heads = ("epoch", "time", *train_labels, *validation_labels)
+        formats = ["d", ".4f"] + [".4f"] * 2 * len(labels)
+        formatter = Formatter(heads, formats, [15] * len(heads), height=10)
+
         config = tf.ConfigProto()
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         session = tf.Session(config=config)
         # session = tf_debug.LocalCLIDebugWrapperSession(session)
         device = tf.device('/cpu:0')
         writer = SummaryWriter(self.options.summaries_dir, session, self.summaries, session.graph)
-        with session, device, writer, figure:
+        with session, device, writer, figure0, figure1:
             session.run(tf.global_variables_initializer())
             best_loss = float("inf")
             for epoch in range(self.options.epochs):
                 data_set = self.get_data_set()
-                start = time.time()
-                for batch in data_set.train:
-                    feed_dict = self.build_feed_dict(batch)
-                    feed_dict = self.correct_target(feed_dict, session)
-                    session.run(self.optimizer, feed_dict)
-                trains_loss, train_scores = [], []
-                for batch in data_set.train:
-                    feed_dict = self.build_feed_dict(batch)
-                    feed_dict = self.correct_target(feed_dict, session)
-                    tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    score = Score.calc(feed_dict[self.tokens_targets], tokens, -1, nop)
-                    train_scores.append(score)
-                    trains_loss.append(loss)
-                validations_loss, validation_scores = [], []
-                for batch in data_set.validation:
-                    feed_dict = self.build_feed_dict(batch)
-                    feed_dict = self.correct_target(feed_dict, session)
-                    tokens, loss = session.run((self.tokens, self.loss), feed_dict)
-                    score = Score.calc(feed_dict[self.tokens_targets], tokens, -1, nop)
-                    validation_scores.append(score)
-                    validations_loss.append(loss)
-                stop = time.time()
-                delay = stop - start
-                train_loss = np.mean(trains_loss)
-                validation_loss = np.mean(validations_loss)
-                train_loss_graph.append(epoch, train_loss)
-                validation_loss_graph.append(epoch, validation_loss)
-                train_score = np.mean([score.F_score(1) for score in train_scores])
-                validation_score = np.mean([score.F_score(1) for score in validation_scores])
-                smoothed_train_f1_graph.append(epoch, train_score)
-                smoothed_validation_f1_graph.append(epoch, validation_score)
-                formatter.print(epoch, delay, train_score, train_loss, validation_score, validation_loss)
-                if np.isnan(train_loss) or np.isnan(validation_loss):
+                with Timer(printer=None) as timer:
+                    for batch in data_set.train:
+                        feed_dict = self.build_feed_dict(batch)
+                        feed_dict = self.correct_target(feed_dict, session)
+                        session.run(self.optimizer, feed_dict)
+                train_losses, train_scores = self.quality(session, data_set.train)
+                validation_losses, validation_scores = self.quality(session, data_set.validation)
+                train_scores = [score.F_score(1) for score in train_scores]
+                validation_scores = [score.F_score(1) for score in validation_scores]
+                array = train_losses + train_scores + validation_losses + validation_scores
+                formatter.print(epoch, timer.delay(), *array)
+                train_loss_is_nan = any(np.isnan(loss) for loss in train_losses)
+                validation_loss_is_nan = any(np.isnan(loss) for loss in validation_losses)
+                if train_loss_is_nan or validation_loss_is_nan:
                     logger.info("NaN detected")
                     break
-                if best_loss > validation_loss:
-                    best_loss = validation_loss
+                if best_loss > validation_losses[-1] + abs(validation_losses[-1] - train_losses[-1]):
+                    best_loss = validation_losses[-1]
                     self.save(session)
-                figure.draw()
-                figure.save()
+                for graph, value in zip(train_loss_graphs, train_losses):
+                    graph.append(epoch, value)
+                for graph, value in zip(validation_loss_graphs, validation_losses):
+                    graph.append(epoch, value)
+                for graph, value in zip(train_score_graphs, train_scores):
+                    graph.append(epoch, value)
+                for graph, value in zip(validation_score_graphs, validation_scores):
+                    graph.append(epoch, value)
+                figure0.draw()
+                figure0.save()
+                figure1.draw()
+                figure1.save()
                 writer.update()
 
     def test(self):
@@ -257,20 +272,33 @@ class AnalyserNet:
         with tf.Session(config=config) as session, tf.device('/cpu:0'):
             session.run(tf.global_variables_initializer())
             self.restore(session)
-            losses, scores = [], []
-            for batch in self.get_data_set().test:
+            data_set = self.get_data_set()
+            losses, scores = self.quality(session, data_set.test)
+            for batch in data_set.test:
                 feed_dict = self.build_feed_dict(batch)
                 feed_dict = self.correct_target(feed_dict, session)
                 labels_fetches = (self.labels_targets, self.labels)
                 tokens_fetches = (self.tokens_targets, self.tokens)
                 strings_fetches = (self.strings_targets, self.strings)
                 array = session.run(labels_fetches + tokens_fetches + strings_fetches, feed_dict)
-                losses_fetches = (self.labels_loss, self.tokens_loss, self.strings_loss, self.loss)
-                losses.append(session.run(losses_fetches, feed_dict))
-                scores.append(calc_scores(*array))
-                print_diff(*array, session.run(self.raw_tokens, feed_dict))
+                inputs = feed_dict[self.inputs]
+                print_diff(inputs, *array, session.run(self.raw_tokens, feed_dict))
             logger.error(self.save_path)
-            losses = [np.mean(typed_losses) for typed_losses in zip(*losses)]
-            scores = [Score.concat(typed_scores) for typed_scores in zip(*scores)]
             print_scores(scores)
+        return losses, scores
+
+    def quality(self, session, batches):
+        losses, scores = [], []
+        for batch in batches:
+            feed_dict = self.build_feed_dict(batch)
+            feed_dict = self.correct_target(feed_dict, session)
+            labels_fetches = (self.labels_targets, self.labels)
+            tokens_fetches = (self.tokens_targets, self.tokens)
+            strings_fetches = (self.strings_targets, self.strings)
+            array = session.run(labels_fetches + tokens_fetches + strings_fetches, feed_dict)
+            losses_fetches = (self.labels_loss, self.tokens_loss, self.strings_loss, self.loss)
+            losses.append(session.run(losses_fetches, feed_dict))
+            scores.append(calc_scores(*array, self.options.flatten_type))
+        losses = [np.mean(typed_losses) for typed_losses in zip(*losses)]
+        scores = [Score.concat(typed_scores) for typed_scores in zip(*scores)]
         return losses, scores

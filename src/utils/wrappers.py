@@ -59,10 +59,11 @@ def trace(func, name=None):
 
 
 class Timer:
-    def __init__(self, name: str):
+    def __init__(self, name: str = None, printer=logger.info):
         self.begin = 0
         self.end = 0
         self.name = name
+        self.printer = printer
 
     def start(self):
         self.begin = time.time()
@@ -75,15 +76,17 @@ class Timer:
 
     def __enter__(self):
         self.start()
-        logger.info("process '%s' is started" % self.name)
+        if self.printer is not None:
+            self.printer("process '{}' is started".format(self.name))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
-        expanded = expand_time(self.delay())
-        formatted = format_time(*expanded)
-        formatter = "process '{}' worked for '{}'"
-        logger.info(formatter.format(self.name, formatted))
+        if self.printer is not None:
+            expanded = expand_time(self.delay())
+            formatted = format_time(*expanded)
+            formatter = "process '{}' worked for '{}'"
+            logger.info(formatter.format(self.name, formatted))
 
 
 class memoize:
