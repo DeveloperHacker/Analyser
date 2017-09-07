@@ -1,6 +1,6 @@
-import json
-import random
 import re
+from collections import namedtuple
+from random import Random
 from typing import Iterable, List, Any, Dict, Tuple
 
 import numpy as np
@@ -130,15 +130,16 @@ def join_java_doc(method):
 
 
 def append_param_delimiter(method):
-    parameters = method[JAVA_DOC][PARAMETER]
-    parameters = [re.sub(r"(%s\s[^\s]+)" % PARAMETER, r"\1:", text) for text in parameters]
-    method[JAVA_DOC][PARAMETER] = parameters
+    if PARAMETER in method[JAVA_DOC]:
+        parameters = method[JAVA_DOC][PARAMETER]
+        parameters = [re.sub(r"(%s\s[^\s]+)" % PARAMETER, r"\1:", text) for text in parameters]
+        method[JAVA_DOC][PARAMETER] = parameters
     return method
 
 
 def append_signature(method):
     description = method[DESCRIPTION]
-    del method[DESCRIPTION]
+    # method[JAVA_DOC][SIGNATURE] = [description[FLAT]]
     name = description["name"]
     owner = description["owner"]
     result = description["type"]
@@ -157,7 +158,7 @@ def apply_anonymizers(method):
 
 
 def one_line_doc(method):
-    java_doc = (method[JAVA_DOC][label].strip() for label in PARTS)
+    java_doc = (method[JAVA_DOC].get(label, "").strip() for label in PARTS)
     java_doc = (" %s " % NEXT).join(text for text in java_doc if len(text) > 0)
     method[JAVA_DOC] = java_doc
     return method
@@ -244,8 +245,6 @@ def batching(methods: Iterable[dict], batch_size: int):
         if len(result) > 0:
             yield result
 
-    methods = list(methods)
-    random.shuffle(methods)
     return (chunk for chunk in chunks(methods, batch_size) if len(chunk) == batch_size)
 
 
@@ -330,13 +329,6 @@ def build_batch(methods: List[dict], filling, flatten_type):
     return (inputs, inputs_length), labels, tokens, strings
 
 
-def load(path: str) -> Iterable[dict]:
-    with open(path) as file:
-        strings = (line for line in file if not line.strip().startswith("//"))
-        methods = json.loads("\n".join(strings))
-    return methods
-
-
 def java_doc(methods) -> Iterable[dict]:
     methods = (method for method in methods if not is_empty(method))
     methods = (append_param_delimiter(method) for method in methods)
@@ -359,5 +351,24 @@ def contract(methods) -> Iterable[dict]:
 def batches(methods, batch_size, filling, flatten_type) -> list:
     batches = batching(methods, batch_size)
     batches = [build_batch(method, filling, flatten_type) for method in batches]
-    random.shuffle(batches)
     return batches
+
+
+DataSet = namedtuple("DataSet", ("train", "validation", "test"))
+
+
+def part(batches, train, validation, test, random: Random) -> DataSet:
+    random.shuffle(batches)
+    data_set_length = len(batches)
+    test_set_length = int(data_set_length * test)
+    not_allocated = data_set_length - test_set_length
+    train_set_length = min(not_allocated, int(data_set_length * train))
+    not_allocated = data_set_length - test_set_length - train_set_length
+    validation_set_length = min(not_allocated, int(data_set_length * validation))
+    test_set = batches[-test_set_length:]
+    batches = batches[:-test_set_length]
+    random.shuffle(batches)
+    train_set = batches[-train_set_length:]
+    batches = batches[:-train_set_length]
+    validation_set = batches[-validation_set_length:]
+    return DataSet(train_set, validation_set, test_set)

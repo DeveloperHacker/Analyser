@@ -1,4 +1,4 @@
-import random
+from random import Random, randint
 from typing import Iterable, Tuple
 
 import tensorflow as tf
@@ -97,14 +97,16 @@ class Statistic:
 @trace("PREPARE DATA-SET")
 def prepare(options: Options):
     statistic = Statistic()
-    methods = prepares.load(RAW_DATA_SET_PATH)
+    methods = dumpers.json_load(RAW_DATA_SET_PATH)
     methods = prepares.java_doc(methods)
     methods = prepares.contract(methods)
     methods = statistic.accountant("number").considers(methods)
     batches = prepares.batches(methods, options.batch_size, FILLING, options.flatten_type)
-    batches = list(batches)
-    dumpers.pkl_dump(batches, options.data_set_path)
-    logger.info("Number of batches: %d" % len(batches))
+    data_set = prepares.part(batches, TRAIN_PART, VALIDATION_PART, TEST_PART, Random(SEED))
+    dumpers.pkl_dump(data_set, DATA_SET_PATH)
+    logger.info("Test set length: %d" % len(data_set.test))
+    logger.info("Train set length: %d" % len(data_set.train))
+    logger.info("Validation set length: %d" % len(data_set.validation))
     statistic.show()
     return batches
 
@@ -112,19 +114,28 @@ def prepare(options: Options):
 @trace("TRAIN")
 def train(options: Options):
     tf.reset_default_graph()
-    net = AnalyserNet(options)
-    net.train()
+    data_set = dumpers.pkl_load(DATA_SET_PATH)
+    net = AnalyserNet(options, data_set)
+    if FLAGS.cross:
+        net.cross()
+    else:
+        net.train()
 
 
 @trace("TEST")
 def test(options: Options):
     tf.reset_default_graph()
-    net = AnalyserNet(options)
+    data_set = dumpers.pkl_load(DATA_SET_PATH)
+    net = AnalyserNet(options, data_set)
     return net.test()
 
 
-@trace("RANDOM")
-def random_options(options: Options):
+def sub(x):
+    defaults = {
+        "inputs_hidden_size": "inputs_state_size",
+        "labels_hidden_size": "labels_state_size",
+        "tokens_hidden_size": "tokens_state_size",
+        "strings_hidden_size": "strings_state_size"}
     names = (
         "inputs_state_size",
         "labels_state_size",
@@ -135,16 +146,30 @@ def random_options(options: Options):
         "tokens_hidden_size",
         "strings_hidden_size",
         "l2_weight")
-    sub = lambda x: tuple(x[name] for name in names if name in x)
+    params = (x[name] for name in names if name in x)
+    params = (x[defaults[name]] if param is None else param for name, param in zip(names, params))
+    return tuple(params)
 
+
+def model_dir(options):
+    params = "-".join(str(val) for val in sub(options.serialize())[:8])
+    return 'resources/analyser/model-%s' % params
+
+
+@trace("RANDOM")
+def random_options(options: Options):
     results = dumpers.json_load(RESULTS_PATH)
     used_options = [sub(result["options"]) for result in results]
     while sub(options.serialize()) in used_options:
-        options.inputs_state_size = random.randint(1, 20) * 10
-        options.inputs_hidden_size = random.randint(1, 20) * 10
-        options.tokens_state_size = random.randint(1, 20) * 10
-        options.strings_state_size = random.randint(1, 20) * 10
-    options.model_dir = 'resources/analyser/model-%d-%d-%d-%d' % sub(options.serialize())[:4]
+        options.inputs_state_size = randint(5, 15) * 10
+        options.labels_state_size = randint(5, 15) * 10
+        options.tokens_state_size = randint(5, 15) * 10
+        options.strings_state_size = randint(5, 15) * 10
+        # options.inputs_hidden_size = randint(5, 15) * 10
+        # options.labels_hidden_size = randint(5, 15) * 10
+        # options.tokens_hidden_size = randint(5, 15) * 10
+        # options.strings_hidden_size = randint(5, 15) * 10
+    options.model_dir = model_dir(options)
 
 
 @trace("STORE")
@@ -174,47 +199,46 @@ def store(losses, scores, options: Options):
 
 
 flags = tf.app.flags
-
 flags.DEFINE_bool('prepare', False, '')
 flags.DEFINE_bool('random', False, '')
 flags.DEFINE_bool('train', False, '')
-
+flags.DEFINE_bool('cross', False, '')
+flags.DEFINE_bool('test', False, '')
 FLAGS = flags.FLAGS
 
 RESULTS_PATH = "resources/analyser/results.json"
 RAW_DATA_SET_PATH = 'resources/data-sets/joda-time.json'
+DATA_SET_PATH = 'resources/analyser/data-set.pickle'
 FILLING = True
+SEED = 58645646
+TRAIN_PART = 0.8
+VALIDATION_PART = 0.1
+TEST_PART = 0.1
 
 
 def main():
     try:
         options = Options()
-        options.minimum_length = 2
-        options.train_set = 0.8
-        options.validation_set = 0.1
-        options.test_set = 0.1
         options.l2_weight = 0.001
         options.epochs = 100
         options.batch_size = 4
         options.summaries_dir = 'resources/analyser/summaries'
-        options.data_set_path = 'resources/analyser/data-set.pickle'
         options.tokens_output_type = "tree"
         options.flatten_type = "bfs"
-        options.inputs_state_size = 40
-        options.labels_state_size = 120
-        options.tokens_state_size = 40
-        options.strings_state_size = 40
-        options.model_dir = 'resources/analyser/model-40-120-40-40'
+        options.label_confidence = 0
+        options.token_confidence = 0
+        options.string_confidence = 0
+        options.inputs_state_size = 50
+        options.labels_state_size = 50
+        options.tokens_state_size = 50
+        options.strings_state_size = 50
+        options.model_dir = model_dir(options)
         if FLAGS.random: random_options(options)
-        dumpers.json_print(options.serialize(), logger.error)
-        logger.info("RESULTS_PATH = %s" % RESULTS_PATH)
-        logger.info("RAW_DATA_SET_PATH = %s" % RAW_DATA_SET_PATH)
-        logger.info("FILLING = %r" % FILLING)
         options.validate()
+        dumpers.json_print(options.serialize(), logger.error)
         if FLAGS.prepare: prepare(options)
         if FLAGS.train: train(options)
-        losses, scores = test(options)
-        store(losses, scores, options)
+        if FLAGS.test: store(*test(options), options)
     except Exception as ex:
         logger.exception(ex)
 

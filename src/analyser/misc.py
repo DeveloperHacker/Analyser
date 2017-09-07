@@ -171,7 +171,10 @@ def transpose_attention(attentions, num_heads=1):
     return attentions
 
 
-def calc_scores(labels_targets, labels, tokens_targets, tokens, strings_targets, strings, flatten_type):
+def calc_scores(labels_targets, labels,
+                tokens_targets, tokens,
+                strings_targets, strings,
+                flatten_type):
     class Dropper(TreeVisitor):
         def visit_string(self, depth: int, node: Node, parent: Node):
             node.token = Token(Types.STRING, Types.STRING)
@@ -352,7 +355,7 @@ def print_diff(inputs, labels_targets, labels, tokens_targets, tokens, strings_t
             for line in cut(" ".join(string), formatter.row_size(-1), Align.left):
                 formatter.print(token, line)
 
-    formatter = Formatter(("tokens", "strings"), ("s", "s"), (20, 80))
+    formatter = Formatter(("tokens", "strings"), ("s", "s"), (20, 100))
     batch_size = len(tokens)
     for i in range(batch_size):
         num_conditions = len(tokens[i])

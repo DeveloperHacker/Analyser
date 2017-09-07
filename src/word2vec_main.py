@@ -7,15 +7,24 @@ from utils.wrappers import trace
 from word2vec import word2vec_optimized as word2vec
 
 flags = tf.app.flags
-
 flags.DEFINE_bool('prepare', False, '')
 flags.DEFINE_bool('train', False, '')
 flags.DEFINE_bool('test', False, '')
+FLAGS = flags.FLAGS
+
+FLAGS.save_path = 'resources/word2vec'
+FLAGS.train_data = 'resources/word2vec/filtered.txt'
+FLAGS.epochs_to_train = 500
+FLAGS.embedding_size = 100
+FLAGS.window_size = 7
+
+MODEL_PATH = 'resources/word2vec/model.ckpt'
+DATA_SET_PATH = 'resources/data-sets/data-set.json'
 
 
 @trace("PREPARE DATA-SET")
 def prepare():
-    methods = prepares.load(DATA_SET_PATH)
+    methods = dumpers.json_load(DATA_SET_PATH)
     methods = prepares.java_doc(methods)
     docs = (method[JAVA_DOC] for method in methods)
     with open(FLAGS.train_data, "w") as file:
@@ -44,17 +53,7 @@ def test():
     generators.show.kneighbors(clusters)
 
 
-FLAGS = flags.FLAGS
-
-FLAGS.save_path = 'resources/word2vec'
-FLAGS.train_data = 'resources/word2vec/filtered.txt'
-FLAGS.epochs_to_train = 500
-FLAGS.embedding_size = 100
-FLAGS.window_size = 7
-
-MODEL_PATH = 'resources/word2vec/model.ckpt'
-DATA_SET_PATH = 'resources/data-sets/data-set.json'
-
-if FLAGS.prepare: prepare()
-if FLAGS.train: train()
-if FLAGS.test: test()
+if __name__ == '__main__':
+    if FLAGS.prepare: prepare()
+    if FLAGS.train: train()
+    if FLAGS.test: test()

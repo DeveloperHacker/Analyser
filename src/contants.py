@@ -35,5 +35,6 @@ TAGS = PARTS + (STRING, NUMBER, HTML_BEGIN, HTML_END, HTML_BLOCK, LINK, PATH, UR
 CONTRACT = "contract"
 JAVA_DOC = "java-doc"
 DESCRIPTION = "description"
+FLAT = "flat"
 
 EMBEDDINGS_PATH = 'resources/word2vec/embeddings.pickle'

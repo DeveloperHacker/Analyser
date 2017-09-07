@@ -1,8 +1,7 @@
 import os
-import random
 import re
 import time
-from collections import namedtuple
+from typing import Optional
 
 import numpy as np
 import tensorflow as tf
@@ -19,17 +18,15 @@ from analyser.misc import cross_entropy_loss, l2_loss, batch_greedy_correct, cal
     print_scores, newest
 from contants import PAD, NOP, UNDEFINED
 from logger import logger
-from utils import dumpers
+from prepares import DataSet
 from utils.Formatter import Formatter
 from utils.SummaryWriter import SummaryWriter
 from utils.wrappers import trace, Timer
 
-DataSet = namedtuple("DataSet", ("train", "validation", "test"))
-
 
 class AnalyserNet:
     @trace("BUILD NET")
-    def __init__(self, options: Options, dtype=None, scope=None):
+    def __init__(self, options: Options, data_set: DataSet, dtype=None, scope=None):
         self.options = options
         self.options.validate()
         num_labels = len(Embeddings.labels())
@@ -81,9 +78,15 @@ class AnalyserNet:
                 hidden_size=self.options.strings_hidden_size, dtype=dtype)
             self.variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope.name)
         with tf.variable_scope("Output"), Timer("BUILD OUTPUT"):
-            self.labels = tf.argmax(self.raw_labels, 2)
-            self.tokens = tf.argmax(self.raw_tokens, 3)
-            self.strings = tf.argmax(self.raw_strings, 4)
+            def confident(raw_data, axis, default, confidence):
+                probs = tf.reduce_max(raw_data, axis)
+                mask = tf.to_int64(tf.greater(probs, confidence))
+                data = tf.argmax(raw_data, axis)
+                return mask * data + (1 - mask) * default
+
+            self.labels = confident(self.raw_labels, 2, undefined, self.options.label_confidence)
+            self.tokens = confident(self.raw_tokens, 3, nop, self.options.token_confidence)
+            self.strings = confident(self.raw_strings, 4, pad, self.options.string_confidence)
         with tf.variable_scope("Loss"), Timer("BUILD LOSS"):
             self.labels_targets = tf.placeholder(tf.int32, [self.options.batch_size, None], "labels")
             self.tokens_targets = tf.placeholder(tf.int32, [self.options.batch_size, None, None], "tokens")
@@ -99,10 +102,11 @@ class AnalyserNet:
             self.summaries = self.add_variable_summaries()
         self.saver = tf.train.Saver(var_list=self.variables)
         self.save_path = self.options.model_dir
+        self.data_set = data_set
 
     def save(self, session: tf.Session):
         if not os.path.isdir(self.save_path):
-            os.mkdir(self.save_path)
+            os.makedirs(self.save_path)
         save_time = time.strftime("%d-%m-%Y-%H-%M-%S")
         model_path = os.path.join(self.save_path, "model-%s.ckpt" % save_time)
         self.saver.save(session, model_path)
@@ -115,32 +119,15 @@ class AnalyserNet:
         model_path = ".".join(model_path.split(".")[:-1])
         self.saver.restore(session, model_path)
 
-    def get_data_set(self) -> DataSet:
-        data_set = dumpers.pkl_load(self.options.data_set_path)
-        data_set_length = len(data_set)
-        not_allocated = data_set_length
-        test_set_length = min(not_allocated, int(data_set_length * self.options.test_set))
-        not_allocated -= test_set_length
-        train_set_length = min(not_allocated, int(data_set_length * self.options.train_set))
-        not_allocated -= train_set_length
-        validation_set_length = min(not_allocated, int(data_set_length * self.options.validation_set))
-        not_allocated -= validation_set_length
-        if test_set_length < self.options.minimum_length:
-            args = (test_set_length, self.options.minimum_length)
-            raise ValueError("Length of the test set is very small, length = %d < %d" % args)
-        if train_set_length < self.options.minimum_length:
-            args = (train_set_length, self.options.minimum_length)
-            raise ValueError("Length of the train set is very small, length = %d < %d" % args)
-        if validation_set_length < self.options.minimum_length:
-            args = (validation_set_length, self.options.minimum_length)
-            raise ValueError("Length of the validation set is very small, length = %d < %d" % args)
-        test_set = data_set[-test_set_length:]
-        data_set = data_set[:-test_set_length]
-        random.shuffle(data_set)
-        train_set = data_set[-train_set_length:]
-        data_set = data_set[:-train_set_length]
-        validation_set = data_set[-validation_set_length:]
-        return DataSet(train_set, validation_set, test_set)
+    def get_data_set(self, index: int) -> Optional[DataSet]:
+        data_set = self.data_set.train + self.data_set.validation
+        validation_length = len(self.data_set.validation)
+        start = index * validation_length
+        validation_set = data_set[start: start + validation_length]
+        if len(validation_set) < validation_length:
+            return None
+        train_set = data_set[:start] + data_set[start + validation_length:]
+        return DataSet(train_set, validation_set, self.data_set.test)
 
     def add_variable_summaries(self):
         variables = [tf.reshape(variable, [-1]) for variable in self.variables]
@@ -154,14 +141,15 @@ class AnalyserNet:
         labels_targets, labels_length = labels
         tokens_targets, tokens_length = tokens
         strings_targets, strings_length = strings
-        feed_dict = {self.inputs: inputs,
-                     self.inputs_length: inputs_length,
-                     self.labels_length: labels_length,
-                     self.tokens_length: tokens_length,
-                     self.strings_length: strings_length,
-                     self.labels_targets: labels_targets,
-                     self.tokens_targets: tokens_targets,
-                     self.strings_targets: strings_targets}
+        feed_dict = {
+            self.inputs: inputs,
+            self.inputs_length: inputs_length,
+            self.labels_length: labels_length,
+            self.tokens_length: tokens_length,
+            self.strings_length: strings_length,
+            self.labels_targets: labels_targets,
+            self.tokens_targets: tokens_targets,
+            self.strings_targets: strings_targets}
         return feed_dict
 
     def correct_target(self, feed_dict, session) -> dict:
@@ -232,14 +220,13 @@ class AnalyserNet:
             session.run(tf.global_variables_initializer())
             best_loss = float("inf")
             for epoch in range(self.options.epochs):
-                data_set = self.get_data_set()
                 with Timer(printer=None) as timer:
-                    for batch in data_set.train:
+                    for batch in self.data_set.train:
                         feed_dict = self.build_feed_dict(batch)
                         feed_dict = self.correct_target(feed_dict, session)
                         session.run(self.optimizer, feed_dict)
-                train_losses, train_scores = self.quality(session, data_set.train)
-                validation_losses, validation_scores = self.quality(session, data_set.validation)
+                train_losses, train_scores = self.quality(session, self.data_set.train)
+                validation_losses, validation_scores = self.quality(session, self.data_set.validation)
                 train_scores = [score.F_score(1) for score in train_scores]
                 validation_scores = [score.F_score(1) for score in validation_scores]
                 array = train_losses + train_scores + validation_losses + validation_scores
@@ -266,15 +253,47 @@ class AnalyserNet:
                 figure1.save()
                 writer.update()
 
+    def cross(self):
+        save_path = self.save_path
+        index = 0
+        results = []
+        while True:
+            self.data_set = self.get_data_set(index)
+            if not self.data_set: break
+            self.save_path = os.path.join(save_path, "iteration-%d" % index)
+            self.train()
+            validation_set = self.data_set.validation
+            results.append(self._test(validation_set, False))
+            index += 1
+        losses, scores = zip(*results)
+        names = ["labels_loss", "tokens_loss", "strings_loss", "loss"]
+        for loss, name in zip(zip(*losses), names):
+            loss = np.asarray(loss)
+            logger.error("min[%s] = %.4f" % (name, int(np.min(loss))))
+            logger.error("max[%s] = %.4f" % (name, int(np.max(loss))))
+            logger.error("mean[%s] = %.4f" % (name, int(np.mean(loss))))
+            logger.error("var[%s] = %.4f" % (name, int(np.var(loss))))
+        names = ["labels", "tokens", "strings", "templates", "code"]
+        for score, name in zip(zip(*scores), names):
+            score1 = np.asarray([_score.F_score(1) for _score in score])
+            score2 = np.asarray([_score.jaccard for _score in score])
+            for _score, _type in ((score1, "f1_score"), (score2, "jaccard_score")):
+                logger.error("min[%s_%s] = %.4f" % (name, _type, int(np.min(_score))))
+                logger.error("max[%s_%s] = %.4f" % (name, _type, int(np.max(_score))))
+                logger.error("mean[%s_%s] = %.4f" % (name, _type, int(np.mean(_score))))
+                logger.error("var[%s_%s] = %.4f" % (name, _type, int(np.var(_score))))
+
     def test(self):
+        return self._test(self.data_set.test, True)
+
+    def _test(self, test_set, show_diff):
         config = tf.ConfigProto()
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         with tf.Session(config=config) as session, tf.device('/cpu:0'):
             session.run(tf.global_variables_initializer())
             self.restore(session)
-            data_set = self.get_data_set()
-            losses, scores = self.quality(session, data_set.test)
-            for batch in data_set.test:
+            losses, scores = self.quality(session, test_set)
+            for batch in test_set:
                 feed_dict = self.build_feed_dict(batch)
                 feed_dict = self.correct_target(feed_dict, session)
                 labels_fetches = (self.labels_targets, self.labels)
@@ -282,7 +301,8 @@ class AnalyserNet:
                 strings_fetches = (self.strings_targets, self.strings)
                 array = session.run(labels_fetches + tokens_fetches + strings_fetches, feed_dict)
                 inputs = feed_dict[self.inputs]
-                print_diff(inputs, *array, session.run(self.raw_tokens, feed_dict))
+                if show_diff:
+                    print_diff(inputs, *array, session.run(self.raw_tokens, feed_dict))
             logger.error(self.save_path)
             print_scores(scores)
         return losses, scores
