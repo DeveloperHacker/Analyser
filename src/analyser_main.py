@@ -1,3 +1,4 @@
+import os
 from random import Random, randint
 from typing import Iterable, Tuple
 
@@ -111,25 +112,6 @@ def prepare(options: Options):
     return batches
 
 
-@trace("TRAIN")
-def train(options: Options):
-    tf.reset_default_graph()
-    data_set = dumpers.pkl_load(DATA_SET_PATH)
-    net = AnalyserNet(options, data_set)
-    if FLAGS.cross:
-        net.cross()
-    else:
-        net.train()
-
-
-@trace("TEST")
-def test(options: Options):
-    tf.reset_default_graph()
-    data_set = dumpers.pkl_load(DATA_SET_PATH)
-    net = AnalyserNet(options, data_set)
-    return net.test()
-
-
 def sub(x):
     defaults = {
         "inputs_hidden_size": "inputs_state_size",
@@ -220,7 +202,7 @@ def main():
     try:
         options = Options()
         options.l2_weight = 0.001
-        options.epochs = 100
+        options.epochs = 50
         options.batch_size = 4
         options.summaries_dir = 'resources/analyser/summaries'
         options.tokens_output_type = "tree"
@@ -233,12 +215,23 @@ def main():
         options.tokens_state_size = 50
         options.strings_state_size = 50
         options.model_dir = model_dir(options)
-        if FLAGS.random: random_options(options)
+        if FLAGS.random:
+            random_options(options)
         options.validate()
         dumpers.json_print(options.serialize(), logger.error)
-        if FLAGS.prepare: prepare(options)
-        if FLAGS.train: train(options)
-        if FLAGS.test: store(*test(options), options)
+        if FLAGS.prepare:
+            prepare(options)
+        data_set = dumpers.pkl_load(DATA_SET_PATH)
+        net = AnalyserNet(options, data_set)
+        if FLAGS.train:
+            if FLAGS.cross:
+                for losses, scores in net.cross():
+                    store(losses, scores, options)
+            else:
+                net.train()
+        if FLAGS.test:
+            losses, scores = net.test()
+            store(losses, scores, options)
     except Exception as ex:
         logger.exception(ex)
 

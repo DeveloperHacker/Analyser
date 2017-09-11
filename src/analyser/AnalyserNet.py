@@ -1,7 +1,6 @@
 import os
 import re
 import time
-from typing import Optional
 
 import numpy as np
 import tensorflow as tf
@@ -119,16 +118,6 @@ class AnalyserNet:
         model_path = ".".join(model_path.split(".")[:-1])
         self.saver.restore(session, model_path)
 
-    def get_data_set(self, index: int) -> Optional[DataSet]:
-        data_set = self.data_set.train + self.data_set.validation
-        validation_length = len(self.data_set.validation)
-        start = index * validation_length
-        validation_set = data_set[start: start + validation_length]
-        if len(validation_set) < validation_length:
-            return None
-        train_set = data_set[:start] + data_set[start + validation_length:]
-        return DataSet(train_set, validation_set, self.data_set.test)
-
     def add_variable_summaries(self):
         variables = [tf.reshape(variable, [-1]) for variable in self.variables]
         tf.summary.histogram("Summary", tf.concat(variables, 0))
@@ -180,6 +169,7 @@ class AnalyserNet:
         feed_dict[self.strings_targets] = strings_targets
         return feed_dict
 
+    @trace("TRAIN")
     def train(self):
         train_loss_graphs, validation_loss_graphs = [], []
         figure0 = ProxyFigure("loss", self.save_path + "/loss.png")
@@ -218,7 +208,6 @@ class AnalyserNet:
         writer = SummaryWriter(self.options.summaries_dir, session, self.summaries, session.graph)
         with session, device, writer, figure0, figure1:
             session.run(tf.global_variables_initializer())
-            best_loss = float("inf")
             for epoch in range(self.options.epochs):
                 with Timer(printer=None) as timer:
                     for batch in self.data_set.train:
@@ -236,9 +225,7 @@ class AnalyserNet:
                 if train_loss_is_nan or validation_loss_is_nan:
                     logger.info("NaN detected")
                     break
-                if best_loss > validation_losses[-1] + abs(validation_losses[-1] - train_losses[-1]):
-                    best_loss = validation_losses[-1]
-                    self.save(session)
+                self.save(session)
                 for graph, value in zip(train_loss_graphs, train_losses):
                     graph.append(epoch, value)
                 for graph, value in zip(validation_loss_graphs, validation_losses):
@@ -253,57 +240,51 @@ class AnalyserNet:
                 figure1.save()
                 writer.update()
 
+    @trace("CROSS VALIDATION")
     def cross(self):
+        def partition(train_set, validation_set, test_set):
+            start = i * part_length
+            data_set = train_set + validation_set
+            validation_set = data_set[start: start + part_length]
+            train_set = data_set[:start] + data_set[start + part_length:]
+            return DataSet(train_set, validation_set, test_set)
+
         save_path = self.save_path
-        index = 0
         results = []
-        while True:
-            self.data_set = self.get_data_set(index)
-            if not self.data_set: break
-            self.save_path = os.path.join(save_path, "iteration-%d" % index)
+        part_length = len(self.data_set.validation)
+        num_parts = (part_length + len(self.data_set.train)) // part_length
+        for i in range(num_parts):
+            logger.info("Iteration #%d/%d" % (i + 1, num_parts))
+            self.save_path = os.path.join(save_path, "iteration-%d" % i)
+            self.data_set = partition(*self.data_set)
             self.train()
-            validation_set = self.data_set.validation
-            results.append(self._test(validation_set, False))
-            index += 1
-        losses, scores = zip(*results)
-        names = ["labels_loss", "tokens_loss", "strings_loss", "loss"]
-        for loss, name in zip(zip(*losses), names):
-            loss = np.asarray(loss)
-            logger.error("min[%s] = %.4f" % (name, int(np.min(loss))))
-            logger.error("max[%s] = %.4f" % (name, int(np.max(loss))))
-            logger.error("mean[%s] = %.4f" % (name, int(np.mean(loss))))
-            logger.error("var[%s] = %.4f" % (name, int(np.var(loss))))
-        names = ["labels", "tokens", "strings", "templates", "code"]
-        for score, name in zip(zip(*scores), names):
-            score1 = np.asarray([_score.F_score(1) for _score in score])
-            score2 = np.asarray([_score.jaccard for _score in score])
-            for _score, _type in ((score1, "f1_score"), (score2, "jaccard_score")):
-                logger.error("min[%s_%s] = %.4f" % (name, _type, int(np.min(_score))))
-                logger.error("max[%s_%s] = %.4f" % (name, _type, int(np.max(_score))))
-                logger.error("mean[%s_%s] = %.4f" % (name, _type, int(np.mean(_score))))
-                logger.error("var[%s_%s] = %.4f" % (name, _type, int(np.var(_score))))
+            validation = self.data_set.validation
+            res = self._test(validation, False)
+            results.append(res)
+        return results
 
     def test(self):
         return self._test(self.data_set.test, True)
 
+    @trace("TEST")
     def _test(self, test_set, show_diff):
         config = tf.ConfigProto()
         config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
         with tf.Session(config=config) as session, tf.device('/cpu:0'):
             session.run(tf.global_variables_initializer())
             self.restore(session)
+            if show_diff:
+                for batch in test_set:
+                    feed_dict = self.build_feed_dict(batch)
+                    feed_dict = self.correct_target(feed_dict, session)
+                    labels_fetches = (self.labels_targets, self.labels)
+                    tokens_fetches = (self.tokens_targets, self.tokens)
+                    strings_fetches = (self.strings_targets, self.strings)
+                    array = session.run(labels_fetches + tokens_fetches + strings_fetches, feed_dict)
+                    inputs = feed_dict[self.inputs]
+                    raw_tokens = session.run(self.raw_tokens, feed_dict)
+                    print_diff(inputs, *array, raw_tokens)
             losses, scores = self.quality(session, test_set)
-            for batch in test_set:
-                feed_dict = self.build_feed_dict(batch)
-                feed_dict = self.correct_target(feed_dict, session)
-                labels_fetches = (self.labels_targets, self.labels)
-                tokens_fetches = (self.tokens_targets, self.tokens)
-                strings_fetches = (self.strings_targets, self.strings)
-                array = session.run(labels_fetches + tokens_fetches + strings_fetches, feed_dict)
-                inputs = feed_dict[self.inputs]
-                if show_diff:
-                    print_diff(inputs, *array, session.run(self.raw_tokens, feed_dict))
-            logger.error(self.save_path)
             print_scores(scores)
         return losses, scores
 
